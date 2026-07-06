@@ -1,0 +1,13 @@
+﻿{
+  "core": {
+    "frontend_dev": 5173
+  },
+  "writer": {
+    "backend": 6173,
+    "frontend_dev": 6174
+  },
+  "artist": {
+    "backend": 6171,
+    "frontend_dev": 5174
+  }
+}

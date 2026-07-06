@@ -1,0 +1,4068 @@
+<template>
+  <div class="chat-thread">
+    <div v-if="messages.length === 0" class="sidebar-empty">
+      <slot name="empty">
+        <span>暂无消息，发送一个任务。</span>
+      </slot>
+    </div>
+
+    <template v-for="msg in messages" :key="msg.id">
+      <!-- Per-message override: product provides full rendering -->
+      <slot
+        v-if="$slots['message-product']"
+        name="message-product"
+        :message="msg"
+      />
+
+      <!-- User message -->
+      <div v-else-if="msg.role === 'user'" class="user-row">
+        <div class="user-stack">
+          <div class="user-bubble">{{ msg.content }}</div>
+          <div v-if="attachmentParts(msg).length" class="message-attachment-list" aria-label="消息附件">
+            <div
+              v-for="part in attachmentParts(msg)"
+              :key="part.id"
+              class="message-attachment-pill"
+            >
+              <span class="message-attachment-kind">{{ attachmentKind(part) }}</span>
+              <span class="message-attachment-name">{{ attachmentName(part) }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- System message (lifecycle, status, errors) -->
+      <div v-else-if="msg.role === 'system'" class="system-row">
+        <div class="system-bubble" :class="systemBubbleClass(msg)">
+          <span class="system-icon">{{ systemIcon(msg) }}</span>
+          <span class="system-text">{{ msg.content }}</span>
+        </div>
+      </div>
+
+      <!-- Assistant message: answer stream + process stream -->
+      <div v-else class="assistant-row">
+        <div class="assistant-message" :class="{ 'assistant-message--live': isLiveMessage(msg) }">
+          <div class="assistant-meta">
+            <span class="assistant-label">{{ assistantLabel }}</span>
+            <span v-if="isLiveMessage(msg) && !isInitialWaitingMessage(msg)" class="assistant-live-state">
+              <span class="stream-spinner" />
+              {{ liveStatusText(msg) }}
+            </span>
+          </div>
+
+          <div v-if="isInitialWaitingMessage(msg)" class="initial-waiting-indicator" aria-label="请求中">
+            <span class="stream-spinner" />
+          </div>
+
+          <!-- ── Part-based rendering ── -->
+          <template v-if="msg.parts && msg.parts.length > 0">
+            <template v-if="isTimelineMessage(msg)">
+              <template v-if="isLiveMessage(msg)">
+                <template
+                  v-for="part in timelineParts(msg)"
+                  :key="part.id"
+                >
+                  <div v-if="part.partType === 'text' && part.content" class="assistant-answer">
+                    <AnimatedStreamText :text-key="part.id" :text="part.content" :active="true" v-slot="{ text, animating }">
+                      <slot name="assistant-content" :content="text">
+                        <div class="part-text-content" :class="{ 'part-text-content--streaming': animating }">{{ text }}</div>
+                      </slot>
+                    </AnimatedStreamText>
+                  </div>
+
+                  <div v-else-if="part.partType === 'model_text' && part.content" class="assistant-answer assistant-answer--process">
+                    <AnimatedStreamText :text-key="part.id" :text="part.content" :active="true" v-slot="{ text, animating }">
+                      <slot name="assistant-content" :content="text">
+                        <div class="part-text-content" :class="{ 'part-text-content--streaming': animating }">{{ text }}</div>
+                      </slot>
+                    </AnimatedStreamText>
+                  </div>
+
+                  <div
+                    v-else-if="part.partType === 'reasoning'"
+                    class="process-step process-step--reasoning"
+                  >
+                    <button
+                      type="button"
+                      class="reasoning-toggle"
+                      @click="togglePartExpand(part, true)"
+                    >
+                      <span class="process-step-marker" />
+                      <span class="process-step-title">思考</span>
+                      <span v-if="reasoningDuration(part, true)" class="reasoning-duration">{{ reasoningDuration(part, true) }}</span>
+                      <span class="tool-expand-chevron">{{ isPartExpanded(part, true) ? '▾' : '▸' }}</span>
+                    </button>
+                    <div v-if="isPartExpanded(part, true)" class="reasoning-body">
+                      <AnimatedStreamText :text-key="part.id" :text="part.content" :active="true" v-slot="{ text, animating }">
+                        <slot name="reasoning-content" :content="text" :live="true">
+                          <span class="process-step-detail" :class="{ 'part-text-content--streaming': animating }">{{ text }}</span>
+                        </slot>
+                      </AnimatedStreamText>
+                    </div>
+                  </div>
+
+                  <div
+                    v-else-if="part.partType === 'decision'"
+                    class="decision-card"
+                    :class="'decision-card--' + part.status"
+                  >
+                    <div class="decision-card-head">
+                      <span class="process-step-marker" />
+                      <span class="decision-card-title">{{ decisionTitle(part) }}</span>
+                      <span class="decision-card-status">{{ decisionStatusLabel(part) }}</span>
+                    </div>
+                    <p v-if="decisionDetail(part)" class="decision-card-detail">{{ decisionDetail(part) }}</p>
+                    <p v-if="decisionResponseText(part)" class="decision-card-decision">{{ decisionResponseText(part) }}</p>
+                    <div v-if="part.status === 'pending' && decisionOptions(part).length > 0" class="decision-options">
+                      <button
+                        v-for="option in decisionOptions(part)"
+                        :key="option.id"
+                        type="button"
+                        class="decision-option"
+                        @click="emit('decision-select', { partId: part.id, option, response: decisionOptionResponse(part, option) })"
+                      >
+                        <span class="decision-option-label">{{ option.label }}</span>
+                        <span v-if="option.description" class="decision-option-desc">{{ option.description }}</span>
+                      </button>
+                    </div>
+                    <div v-if="canGuideDecision(part)" class="decision-guide">
+                      <span class="decision-guide-label">其他</span>
+                      <textarea
+                        class="decision-guide-input"
+                        :value="decisionGuideDraft(part)"
+                        placeholder="其他处理方式..."
+                        rows="2"
+                        @input="updateDecisionGuideDraft(part, $event)"
+                      />
+                      <button
+                        type="button"
+                        class="decision-guide-submit"
+                        :disabled="!decisionGuideDraft(part).trim()"
+                        @click="submitDecisionGuide(part)"
+                      >
+                        执行
+                      </button>
+                    </div>
+                  </div>
+
+                  <div v-else-if="isHighValueLivePart(part)" class="process-stream process-stream--live process-stream--inline">
+                    <div
+                      v-if="(part.partType === 'tool_call' || part.partType === 'tool_result') && !isControlTool(part)"
+                      class="process-step process-step--tool"
+                      :class="['process-step--' + part.status, toolColorClass(part)]"
+                    >
+                      <button
+                        type="button"
+                        class="tool-card-header"
+                        :class="[{ 'has-detail': hasToolDisplay(part) }, toolColorClass(part)]"
+                        @click="togglePartExpand(part, true)"
+                      >
+                        <span class="process-step-marker" />
+                        <span class="tool-type-tag" :class="toolColorClass(part)">{{ toolTypeLabel(part) }}</span>
+                        <span class="process-step-title">{{ readableProcessTitle(part) }}</span>
+                        <span v-if="part.toolArgs && Object.keys(part.toolArgs).length > 0 && !isCommandTool(part)" class="tool-args-preview">{{ toolArgsPreview(part.toolArgs) }}</span>
+                        <span
+                          v-if="hasToolDisplay(part)"
+                          class="tool-expand-chevron"
+                        >{{ shouldShowToolBody(part, true) ? '▾' : '▸' }}</span>
+                      </button>
+                      <div v-if="shouldShowToolBody(part, true)" class="tool-card-body">
+                        <pre v-if="displayToolError(part)" class="tool-output tool-output--error">{{ displayToolError(part) }}</pre>
+                        <div v-if="displayToolResult(part) && isFileTool(part)" class="diff-block" :class="[fileDiffClass(part), { 'diff-block--wrap': isToolWrapEnabled(part.id) }]">
+                          <div class="diff-header">
+                            <span class="diff-file">{{ diffHeaderText(part) }}</span>
+                            <button type="button" class="wrap-toggle" @click.stop="toggleToolWrap(part.id)">{{ isToolWrapEnabled(part.id) ? 'wrap' : 'scroll' }}</button>
+                          </div>
+                          <div class="diff-lines">
+                            <div v-for="(line, li) in diffDisplayLines(part)" :key="li" class="diff-line" :class="diffLineClass(line, part)">
+                              <span class="diff-line-num">{{ diffLineGutter(line, li, part) }}</span>
+                              <span class="diff-line-content">{{ diffLineContent(line, part) }}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div v-else-if="testArtifact(part)" class="test-result-card" :class="testResultClass(part)">
+                          <div class="test-result-head">
+                            <span class="test-result-state">{{ testResultTitle(part) }}</span>
+                            <span class="test-result-command">{{ testResultCommand(part) }}</span>
+                          </div>
+                          <div class="test-result-meta">
+                            <span v-for="item in testResultMeta(part)" :key="item">{{ item }}</span>
+                          </div>
+                          <pre v-if="testResultOutput(part)" class="test-result-output">{{ testResultOutput(part) }}</pre>
+                        </div>
+                        <div v-else-if="displayToolResult(part) && isCommandTool(part)" class="command-output">
+                          <strong class="command-output-command">{{ commandDisplayText(part) }}</strong>
+                          <pre class="command-output-result">{{ commandOutputText(part) }}</pre>
+                        </div>
+                        <div v-else-if="displayToolResult(part)" class="tool-output">
+                          <div v-if="toolMetaItems(part).length > 0" class="tool-output-meta">
+                            <span v-for="item in toolMetaItems(part)" :key="item">{{ item }}</span>
+                          </div>
+                          <pre class="tool-output-content" :class="{ 'tool-output-content--wrap': isToolWrapEnabled(part.id) }" @click="toggleToolWrap(part.id)">{{ toolOutputContent(part) }}</pre>
+                        </div>
+                        <pre v-else-if="readableProcessDetail(part)" class="tool-output">{{ readableProcessDetail(part) }}</pre>
+                      </div>
+                    </div>
+
+                    <div v-else class="process-timeline">
+                      <div
+                        class="process-step"
+                        :class="['process-step--' + part.status, part.status === 'completed' ? 'process-step--compact' : 'process-step--current']"
+                      >
+                        <span class="process-step-marker" />
+                        <span class="tool-type-tag" :class="processColorClass(part)">{{ processKindLabel(part) }}</span>
+                        <span class="process-step-title">{{ readableProcessTitle(part) }}</span>
+                        <span v-if="readableProcessDetail(part)" class="process-step-detail">{{ readableProcessDetail(part) }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+
+              </template>
+
+              <template v-else>
+                <button
+                  v-if="processSummary(msg).count > 0"
+                  type="button"
+                  class="process-toggle"
+                  @click="emit('toggle-process', msg.id)"
+                >
+                  <span class="process-toggle-icon" :class="processBarStatus(msg)" />
+                  <span class="process-toggle-text">{{ processSummary(msg).text }}</span>
+                  <span class="process-toggle-hint">{{ isProcessExpanded(msg) ? '收起过程' : '查看过程' }}</span>
+                  <span class="process-toggle-chevron">{{
+                    isProcessExpanded(msg) ? '▾' : '▸'
+                  }}</span>
+                </button>
+
+                <div v-if="isProcessExpanded(msg)" class="process-stream process-stream--history">
+                  <template
+                    v-for="group in groupParts(msg.parts)"
+                    :key="group.kind === 'context-group' ? `context-${group.items.map((item) => item.id).join('-')}` : group.part.id"
+                  >
+                    <div v-if="group.kind === 'context-group'" class="process-step process-step--context" :class="'process-step--' + (group.status || 'pending')">
+                      <button
+                        type="button"
+                        class="context-group-header"
+                        @click="toggleToolExpand(contextGroupId(group))"
+                      >
+                        <span class="process-step-marker" />
+                        <span class="process-step-title">{{ group.label }}</span>
+                        <span class="process-step-detail">{{ group.detail }}</span>
+                        <span class="tool-expand-chevron">{{ isToolExpanded(contextGroupId(group)) ? '▾' : '▸' }}</span>
+                      </button>
+                      <div v-if="isToolExpanded(contextGroupId(group))" class="context-tool-list">
+                        <div
+                          v-for="item in group.items"
+                          :key="item.id"
+                          class="context-tool-card"
+                        >
+                          <div class="context-tool-head">
+                            <span class="tool-type-tag" :class="toolColorClass(item)">{{ toolTypeLabel(item) }}</span>
+                            <span class="process-step-title">{{ readableProcessTitle(item) }}</span>
+                            <span v-if="item.toolArgs && Object.keys(item.toolArgs).length > 0 && !isCommandTool(item)" class="tool-args-preview">{{ toolArgsPreview(item.toolArgs) }}</span>
+                          </div>
+                          <div v-if="displayToolResult(item) || readableProcessDetail(item)" class="tool-output context-tool-output">
+                            <div v-if="toolMetaItems(item).length > 0" class="tool-output-meta">
+                              <span v-for="meta in toolMetaItems(item)" :key="meta">{{ meta }}</span>
+                            </div>
+                            <pre class="tool-output-content">{{ toolOutputContent(item) }}</pre>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <template v-else-if="group.kind === 'process' && group.part">
+                      <div
+                        v-if="(group.part.partType === 'tool_call' || group.part.partType === 'tool_result') && !isControlTool(group.part)"
+                        class="process-step process-step--tool"
+                        :class="'process-step--' + group.part.status"
+                      >
+                        <button
+                          type="button"
+                        class="tool-card-header"
+                        :class="[{ 'has-detail': hasToolDisplay(group.part) }, toolColorClass(group.part)]"
+                        @click="togglePartExpand(group.part, false)"
+                        >
+                          <span class="process-step-marker" />
+                          <span class="tool-type-tag" :class="toolColorClass(group.part)">{{ toolTypeLabel(group.part) }}</span>
+                          <span class="process-step-title">{{ readableProcessTitle(group.part) }}</span>
+                          <span v-if="group.part.toolArgs && Object.keys(group.part.toolArgs).length > 0 && !isCommandTool(group.part)" class="tool-args-preview">{{ toolArgsPreview(group.part.toolArgs) }}</span>
+                          <span
+                            v-if="hasToolDisplay(group.part)"
+                            class="tool-expand-chevron"
+                          >{{ shouldShowToolBody(group.part, false) ? '▾' : '▸' }}</span>
+                        </button>
+                        <div v-if="shouldShowToolBody(group.part, false)" class="tool-card-body">
+                          <pre v-if="displayToolError(group.part)" class="tool-output tool-output--error">{{ displayToolError(group.part) }}</pre>
+                        <div v-if="displayToolResult(group.part) && isFileTool(group.part)" class="diff-block" :class="[fileDiffClass(group.part), { 'diff-block--wrap': isToolWrapEnabled(group.part.id) }]">
+                          <div class="diff-header">
+                            <span class="diff-file">{{ diffHeaderText(group.part) }}</span>
+                            <button type="button" class="wrap-toggle" @click.stop="toggleToolWrap(group.part.id)">{{ isToolWrapEnabled(group.part.id) ? 'wrap' : 'scroll' }}</button>
+                          </div>
+                            <div class="diff-lines">
+                              <div v-for="(line, li) in diffDisplayLines(group.part)" :key="li" class="diff-line" :class="diffLineClass(line, group.part)">
+                                <span class="diff-line-num">{{ diffLineGutter(line, li, group.part) }}</span>
+                                <span class="diff-line-content">{{ diffLineContent(line, group.part) }}</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div v-else-if="testArtifact(group.part)" class="test-result-card" :class="testResultClass(group.part)">
+                            <div class="test-result-head">
+                              <span class="test-result-state">{{ testResultTitle(group.part) }}</span>
+                              <span class="test-result-command">{{ testResultCommand(group.part) }}</span>
+                            </div>
+                            <div class="test-result-meta">
+                              <span v-for="item in testResultMeta(group.part)" :key="item">{{ item }}</span>
+                            </div>
+                            <pre v-if="testResultOutput(group.part)" class="test-result-output">{{ testResultOutput(group.part) }}</pre>
+                          </div>
+                          <div v-else-if="displayToolResult(group.part) && isCommandTool(group.part)" class="command-output">
+                            <strong class="command-output-command">{{ commandDisplayText(group.part) }}</strong>
+                            <pre class="command-output-result">{{ commandOutputText(group.part) }}</pre>
+                          </div>
+                          <div v-else-if="displayToolResult(group.part)" class="tool-output">
+                            <div v-if="toolMetaItems(group.part).length > 0" class="tool-output-meta">
+                              <span v-for="item in toolMetaItems(group.part)" :key="item">{{ item }}</span>
+                            </div>
+                            <pre class="tool-output-content" :class="{ 'tool-output-content--wrap': isToolWrapEnabled(group.part.id) }" @click="toggleToolWrap(group.part.id)">{{ toolOutputContent(group.part) }}</pre>
+                          </div>
+                          <pre v-else-if="readableProcessDetail(group.part)" class="tool-output">{{ readableProcessDetail(group.part) }}</pre>
+                        </div>
+                      </div>
+
+                      <div
+                        v-else-if="group.part.partType === 'reasoning'"
+                        class="process-step process-step--reasoning"
+                      >
+                        <button
+                          type="button"
+                          class="reasoning-toggle"
+                          @click="togglePartExpand(group.part, false)"
+                        >
+                          <span class="process-step-marker" />
+                          <span class="process-step-title">思考</span>
+                          <span v-if="reasoningDuration(group.part)" class="reasoning-duration">{{ reasoningDuration(group.part) }}</span>
+                          <span class="tool-expand-chevron">{{ isPartExpanded(group.part, false) ? '▾' : '▸' }}</span>
+                        </button>
+                        <div v-if="isPartExpanded(group.part, false)" class="reasoning-body">
+                          <slot name="reasoning-content" :content="group.part.content" :live="false">
+                            <span class="process-step-detail">{{ group.part.content }}</span>
+                          </slot>
+                        </div>
+                      </div>
+
+                      <div
+                        v-else-if="group.part.partType === 'model_text'"
+                        class="process-step process-step--model-text"
+                        :class="'process-step--' + group.part.status"
+                      >
+                        <div class="process-text-head">
+                          <span class="process-step-marker" />
+                          <span class="process-step-title">{{ modelTextTitle(group.part) }}</span>
+                        </div>
+                        <slot name="assistant-content" :content="group.part.content">
+                          <div class="part-text-content process-text-content">{{ group.part.content }}</div>
+                        </slot>
+                      </div>
+
+                      <div
+                        v-else-if="group.part.partType === 'decision'"
+                        class="decision-card"
+                        :class="'decision-card--' + group.part.status"
+                      >
+                        <div class="decision-card-head">
+                          <span class="process-step-marker" />
+                          <span class="decision-card-title">{{ decisionTitle(group.part) }}</span>
+                          <span class="decision-card-status">{{ decisionStatusLabel(group.part) }}</span>
+                        </div>
+                        <p v-if="decisionDetail(group.part)" class="decision-card-detail">{{ decisionDetail(group.part) }}</p>
+                        <p v-if="decisionResponseText(group.part)" class="decision-card-decision">{{ decisionResponseText(group.part) }}</p>
+                        <div v-if="group.part.status === 'pending' && decisionOptions(group.part).length > 0" class="decision-options">
+                          <button
+                            v-for="option in decisionOptions(group.part)"
+                            :key="option.id"
+                            type="button"
+                            class="decision-option"
+                            @click="emit('decision-select', { partId: group.part.id, option, response: decisionOptionResponse(group.part, option) })"
+                          >
+                            <span class="decision-option-label">{{ option.label }}</span>
+                            <span v-if="option.description" class="decision-option-desc">{{ option.description }}</span>
+                          </button>
+                        </div>
+                        <div v-if="canGuideDecision(group.part)" class="decision-guide">
+                          <span class="decision-guide-label">其他</span>
+                          <textarea
+                            class="decision-guide-input"
+                            :value="decisionGuideDraft(group.part)"
+                            placeholder="其他处理方式..."
+                            rows="2"
+                            @input="updateDecisionGuideDraft(group.part, $event)"
+                          />
+                          <button
+                            type="button"
+                            class="decision-guide-submit"
+                            :disabled="!decisionGuideDraft(group.part).trim()"
+                            @click="submitDecisionGuide(group.part)"
+                          >
+                            执行
+                          </button>
+                        </div>
+                      </div>
+
+                      <div
+                        v-else-if="isSubLinePart(group.part)"
+                        class="sub-line-block"
+                      >
+                        <div class="sub-line-heading">
+                          <span class="process-step-marker" />
+                          <span class="sub-line-title">{{ agentTitle(group.part) }}</span>
+                          <span class="sub-line-status">{{ agentStatusLabel(group.part) }}</span>
+                        </div>
+                        <div v-if="agentDeliveryMeta(group.part).length > 0" class="sub-line-delivery-meta">
+                          <span v-for="item in agentDeliveryMeta(group.part)" :key="item">{{ item }}</span>
+                        </div>
+                        <div class="sub-line-body">
+                            <div v-if="agentAssignmentText(group.part)" class="user-row sub-line-user-row">
+                              <div class="user-bubble sub-line-user-bubble">{{ agentAssignmentText(group.part) }}</div>
+                            </div>
+                            <div v-if="agentTimelineParts(group.part).length > 0" class="sub-line-nested-process">
+                              <template
+                                v-for="itemPart in agentTimelineParts(group.part)"
+                                :key="itemPart.id"
+                              >
+                                <div
+                                  v-if="itemPart.partType === 'reasoning'"
+                                  class="process-step process-step--reasoning"
+                                >
+                                  <button
+                                    type="button"
+                                    class="reasoning-toggle"
+                                    @click="togglePartExpand(itemPart, false)"
+                                  >
+                                    <span class="process-step-marker" />
+                                    <span class="process-step-title">思考</span>
+                                    <span v-if="reasoningDuration(itemPart)" class="reasoning-duration">{{ reasoningDuration(itemPart) }}</span>
+                                    <span class="tool-expand-chevron">{{ isPartExpanded(itemPart, false) ? '▾' : '▸' }}</span>
+                                  </button>
+                                  <div v-if="isPartExpanded(itemPart, false)" class="reasoning-body">
+                                    <slot name="reasoning-content" :content="itemPart.content" :live="false">
+                                      <span class="process-step-detail">{{ itemPart.content }}</span>
+                                    </slot>
+                                  </div>
+                                </div>
+                                <div
+                                  v-else
+                                  class="process-step process-step--tool"
+                                  :class="['process-step--' + itemPart.status, toolColorClass(itemPart)]"
+                                >
+                                  <button
+                                    type="button"
+                                    class="tool-card-header"
+                                    :class="[{ 'has-detail': hasToolDisplay(itemPart) || readableProcessDetail(itemPart) }, toolColorClass(itemPart)]"
+                                    @click="togglePartExpand(itemPart, false)"
+                                  >
+                                    <span class="process-step-marker" />
+                                    <span class="tool-type-tag" :class="toolColorClass(itemPart)">{{ toolTypeLabel(itemPart) }}</span>
+                                    <span class="process-step-title">{{ readableProcessTitle(itemPart) }}</span>
+                                    <span
+                                      v-if="hasToolDisplay(itemPart) || readableProcessDetail(itemPart)"
+                                      class="tool-expand-chevron"
+                                    >{{ isPartExpanded(itemPart, false) ? '▾' : '▸' }}</span>
+                                  </button>
+                                  <div v-if="isPartExpanded(itemPart, false)" class="tool-card-body">
+                                    <pre v-if="displayToolError(itemPart)" class="tool-output tool-output--error">{{ displayToolError(itemPart) }}</pre>
+                                    <div v-else-if="displayToolResult(itemPart) && isFileTool(itemPart)" class="diff-block" :class="[fileDiffClass(itemPart), { 'diff-block--wrap': isToolWrapEnabled(itemPart.id) }]">
+                                      <div class="diff-header">
+                                        <span class="diff-file">{{ diffHeaderText(itemPart) }}</span>
+                                        <button type="button" class="wrap-toggle" @click.stop="toggleToolWrap(itemPart.id)">{{ isToolWrapEnabled(itemPart.id) ? 'wrap' : 'scroll' }}</button>
+                                      </div>
+                                      <div class="diff-lines">
+                                        <div v-for="(line, li) in diffDisplayLines(itemPart)" :key="li" class="diff-line" :class="diffLineClass(line, itemPart)">
+                                          <span class="diff-line-num">{{ diffLineGutter(line, li, itemPart) }}</span>
+                                          <span class="diff-line-content">{{ diffLineContent(line, itemPart) }}</span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                    <div v-else-if="displayToolResult(itemPart) && isCommandTool(itemPart)" class="command-output">
+                                      <strong class="command-output-command">{{ commandDisplayText(itemPart) }}</strong>
+                                      <pre class="command-output-result">{{ commandOutputText(itemPart) }}</pre>
+                                    </div>
+                                    <pre v-else-if="displayToolResult(itemPart)" class="tool-output">{{ toolOutputContent(itemPart) }}</pre>
+                                    <pre v-else-if="readableProcessDetail(itemPart)" class="tool-output">{{ readableProcessDetail(itemPart) }}</pre>
+                                  </div>
+                                </div>
+                              </template>
+                            </div>
+                            <div v-if="agentConclusion(group.part)" class="assistant-answer sub-line-assistant-answer">
+                              <slot name="assistant-content" :content="agentConclusion(group.part)">
+                                <div class="part-text-content">{{ agentConclusion(group.part) }}</div>
+                              </slot>
+                            </div>
+                        </div>
+                      </div>
+
+                      <div
+                        v-else-if="group.part.partType === 'compaction'"
+                        class="process-step process-step--compaction"
+                        :class="'process-step--' + group.part.status"
+                      >
+                        <button
+                          type="button"
+                          class="compaction-toggle"
+                          :disabled="isSkippedCompaction(group.part)"
+                          @click="!isSkippedCompaction(group.part) && toggleToolExpand(group.part.id)"
+                        >
+                          <span class="process-step-marker" />
+                          <span class="process-step-title">{{ compactionTitle(group.part) }}</span>
+                          <span class="process-step-detail">{{ compactionDetail(group.part) }}</span>
+                          <span v-if="!isSkippedCompaction(group.part)" class="tool-expand-chevron">{{ isToolExpanded(group.part.id) ? '▾' : '▸' }}</span>
+                        </button>
+                        <div v-if="!isSkippedCompaction(group.part) && isToolExpanded(group.part.id)" class="compaction-summary">
+                          <pre class="compaction-summary-text">{{ compactionPreview(group.part) }}</pre>
+                        </div>
+                      </div>
+
+                      <div
+                        v-else-if="isChecklistPart(group.part)"
+                        class="checklist-card"
+                        :class="'checklist-card--' + group.part.status"
+                      >
+                        <div class="checklist-card-head">
+                          <span class="process-step-marker" />
+                          <span class="process-step-title">{{ controlTitle(group.part) }}</span>
+                        </div>
+                        <ol class="checklist-items">
+                          <li v-for="item in checklistItems(group.part)" :key="item.id" class="checklist-item" :class="'checklist-item--' + item.status">
+                            <span class="checklist-box">{{ item.checked ? '✓' : '' }}</span>
+                            <span class="checklist-text">{{ item.text }}</span>
+                          </li>
+                        </ol>
+                      </div>
+
+                      <div v-else class="process-step process-step--info" :class="'process-step--' + group.part.status">
+                        <button
+                          v-if="hasExpandableProcessDetail(group.part)"
+                          type="button"
+                          class="process-inline-toggle"
+                          @click="togglePartExpand(group.part, false)"
+                        >
+                          <span class="process-step-marker" />
+                          <span v-if="showProcessKindTag(group.part)" class="tool-type-tag" :class="processColorClass(group.part)">{{ processKindLabel(group.part) }}</span>
+                          <span class="process-step-title">{{ readableProcessTitle(group.part) }}</span>
+                          <span class="process-step-detail">{{ processDetailPreview(group.part) }}</span>
+                          <span class="tool-expand-chevron">{{ isPartExpanded(group.part, false) ? '▾' : '▸' }}</span>
+                        </button>
+                        <template v-else>
+                          <span class="process-step-marker" />
+                          <span v-if="showProcessKindTag(group.part)" class="tool-type-tag" :class="processColorClass(group.part)">{{ processKindLabel(group.part) }}</span>
+                          <span class="process-step-title">{{ readableProcessTitle(group.part) }}</span>
+                          <span v-if="readableProcessDetail(group.part)" class="process-step-detail">{{ readableProcessDetail(group.part) }}</span>
+                        </template>
+                        <div v-if="hasExpandableProcessDetail(group.part) && isPartExpanded(group.part, false)" class="process-detail-panel">
+                          <button type="button" class="process-detail-copy" @click.stop="copyProcessDetail(group.part)">复制</button>
+                          <pre>{{ fullProcessDetail(group.part) }}</pre>
+                        </div>
+                      </div>
+                    </template>
+                  </template>
+                </div>
+
+                <div v-if="answerContent(msg)" class="assistant-answer">
+                  <slot name="assistant-content" :content="answerContent(msg)">
+                    <div class="part-text-content">{{ answerContent(msg) }}</div>
+                  </slot>
+                </div>
+                <template v-else>
+                  <div
+                    v-for="(group, gi) in textGroups(msg.parts)"
+                    :key="'timeline-txt-' + gi"
+                    class="assistant-answer"
+                  >
+                    <slot name="assistant-content" :content="group.content">
+                      <div class="part-text-content">{{ group.content }}</div>
+                    </slot>
+                  </div>
+                </template>
+              </template>
+            </template>
+
+            <div
+              v-if="!isTimelineMessage(msg) && isLiveMessage(msg) && !isInitialWaitingMessage(msg)"
+              class="process-stream process-stream--live"
+              :class="{ 'process-stream--secondary': hasAnswerContent(msg) }"
+            >
+              <div class="process-current">
+                <span class="stream-spinner" />
+                <span class="process-current-title">{{ liveStatusText(msg) }}</span>
+                <span v-if="liveDetailText(msg)" class="process-current-detail">{{ liveDetailText(msg) }}</span>
+              </div>
+
+              <div v-if="liveProcessItems(msg).length > 0" class="process-timeline">
+                <div
+                  v-for="item in liveProcessItems(msg)"
+                  :key="item.id"
+                  class="process-step"
+                  :class="['process-step--' + item.status, item.compact ? 'process-step--compact' : 'process-step--current']"
+                >
+                  <span class="process-step-marker" />
+                  <span class="process-step-title">{{ item.title }}</span>
+                  <span v-if="item.detail" class="process-step-detail">{{ item.detail }}</span>
+                </div>
+              </div>
+            </div>
+
+            <template v-if="isLiveMessage(msg)">
+              <div v-if="msg.content" class="assistant-answer">
+                <AnimatedStreamText :text-key="msg.id" :text="msg.content" :active="true" v-slot="{ text, animating }">
+                  <slot name="assistant-content" :content="text">
+                    <div class="part-text-content" :class="{ 'part-text-content--streaming': animating }">{{ text }}</div>
+                  </slot>
+                </AnimatedStreamText>
+              </div>
+              <template v-else>
+                <div
+                  v-for="(group, gi) in textGroups(msg.parts)"
+                  :key="'live-txt-' + gi"
+                  class="assistant-answer"
+                >
+                  <AnimatedStreamText :text-key="`group-${msg.id}-${gi}`" :text="group.content" :active="true" v-slot="{ text, animating }">
+                    <slot name="assistant-content" :content="text">
+                      <div class="part-text-content" :class="{ 'part-text-content--streaming': animating }">{{ text }}</div>
+                    </slot>
+                  </AnimatedStreamText>
+                </div>
+              </template>
+            </template>
+
+            <!-- Completed process summary; reasoning remains visible by default. -->
+            <button
+              v-if="!isTimelineMessage(msg) && !isLiveMessage(msg) && processSummary(msg).count > 0"
+              type="button"
+              class="process-toggle"
+              @click="emit('toggle-process', msg.id)"
+            >
+              <span class="process-toggle-icon" :class="processBarStatus(msg)" />
+              <span class="process-toggle-text">{{ processSummary(msg).text }}</span>
+              <span class="process-toggle-hint">{{ isProcessExpanded(msg) ? '收起过程' : '查看过程' }}</span>
+              <span class="process-toggle-chevron">{{
+                isProcessExpanded(msg) ? '▾' : '▸'
+              }}</span>
+            </button>
+
+            <div v-if="!isTimelineMessage(msg) && !isLiveMessage(msg) && isProcessExpanded(msg)" class="process-stream process-stream--history">
+              <template
+                v-for="group in groupParts(msg.parts)"
+                :key="group.kind === 'context-group' ? `context-${group.items.map((item) => item.id).join('-')}` : group.part.id"
+              >
+                <div v-if="group.kind === 'context-group'" class="process-step process-step--context" :class="'process-step--' + (group.status || 'pending')">
+                  <button
+                    type="button"
+                    class="context-group-header"
+                    @click="toggleToolExpand(contextGroupId(group))"
+                  >
+                    <span class="process-step-marker" />
+                    <span class="process-step-title">{{ group.label }}</span>
+                    <span class="process-step-detail">{{ group.detail }}</span>
+                    <span class="tool-expand-chevron">{{ isToolExpanded(contextGroupId(group)) ? '▾' : '▸' }}</span>
+                  </button>
+                  <div v-if="isToolExpanded(contextGroupId(group))" class="context-tool-list">
+                    <div
+                      v-for="item in group.items"
+                      :key="item.id"
+                      class="context-tool-card"
+                    >
+                      <div class="context-tool-head">
+                        <span class="tool-type-tag" :class="toolColorClass(item)">{{ toolTypeLabel(item) }}</span>
+                        <span class="process-step-title">{{ readableProcessTitle(item) }}</span>
+                        <span v-if="item.toolArgs && Object.keys(item.toolArgs).length > 0 && !isCommandTool(item)" class="tool-args-preview">{{ toolArgsPreview(item.toolArgs) }}</span>
+                      </div>
+                      <div v-if="displayToolResult(item) || readableProcessDetail(item)" class="tool-output context-tool-output">
+                        <div v-if="toolMetaItems(item).length > 0" class="tool-output-meta">
+                          <span v-for="meta in toolMetaItems(item)" :key="meta">{{ meta }}</span>
+                        </div>
+                        <pre class="tool-output-content">{{ toolOutputContent(item) }}</pre>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <template v-else-if="group.kind === 'process' && group.part">
+                  <div
+                    v-if="group.part.partType === 'reasoning'"
+                    class="process-step process-step--reasoning"
+                  >
+                    <button
+                      type="button"
+                      class="reasoning-toggle"
+                      @click="togglePartExpand(group.part, false)"
+                    >
+                      <span class="process-step-marker" />
+                      <span class="process-step-title">思考</span>
+                      <span v-if="reasoningDuration(group.part)" class="reasoning-duration">{{ reasoningDuration(group.part) }}</span>
+                      <span class="tool-expand-chevron">{{ isPartExpanded(group.part, false) ? '▾' : '▸' }}</span>
+                    </button>
+                    <div v-if="isPartExpanded(group.part, false)" class="reasoning-body">
+                      <slot name="reasoning-content" :content="group.part.content" :live="false">
+                        <span class="process-step-detail">{{ group.part.content }}</span>
+                      </slot>
+                    </div>
+                  </div>
+
+                  <div
+                    v-else-if="(group.part.partType === 'tool_call' || group.part.partType === 'tool_result') && !isControlTool(group.part)"
+                    class="process-step process-step--tool"
+                    :class="'process-step--' + group.part.status"
+                  >
+                    <button
+                      type="button"
+                      class="tool-card-header"
+                      :class="[{ 'has-detail': hasToolDisplay(group.part) }, toolColorClass(group.part)]"
+                      @click="togglePartExpand(group.part, false)"
+                    >
+                      <span class="process-step-marker" />
+                      <span class="tool-type-tag" :class="toolColorClass(group.part)">{{ toolTypeLabel(group.part) }}</span>
+                      <span class="process-step-title">{{ readableProcessTitle(group.part) }}</span>
+                      <span v-if="group.part.toolArgs && Object.keys(group.part.toolArgs).length > 0 && !isCommandTool(group.part)" class="tool-args-preview">{{ toolArgsPreview(group.part.toolArgs) }}</span>
+                      <span
+                        v-if="hasToolDisplay(group.part)"
+                        class="tool-expand-chevron"
+                      >{{ shouldShowToolBody(group.part, false) ? '▾' : '▸' }}</span>
+                    </button>
+                    <span v-if="!hasToolDisplay(group.part) && !group.part.toolArgs && readableProcessDetail(group.part)" class="process-step-detail">{{ readableProcessDetail(group.part) }}</span>
+                    <div v-if="shouldShowToolBody(group.part, false)" class="tool-card-body">
+                      <pre v-if="displayToolError(group.part)" class="tool-output tool-output--error">{{ displayToolError(group.part) }}</pre>
+                      <!-- File tools: diff-style block with line numbers -->
+                      <div v-if="displayToolResult(group.part) && isFileTool(group.part)" class="diff-block" :class="[fileDiffClass(group.part), { 'diff-block--wrap': isToolWrapEnabled(group.part.id) }]">
+                        <div class="diff-header">
+                          <span class="diff-file">{{ diffHeaderText(group.part) }}</span>
+                          <button type="button" class="wrap-toggle" @click.stop="toggleToolWrap(group.part.id)">{{ isToolWrapEnabled(group.part.id) ? 'wrap' : 'scroll' }}</button>
+                        </div>
+                        <div class="diff-lines">
+                            <div v-for="(line, li) in diffDisplayLines(group.part)" :key="li" class="diff-line" :class="diffLineClass(line, group.part)">
+                              <span class="diff-line-num">{{ diffLineGutter(line, li, group.part) }}</span>
+                              <span class="diff-line-content">{{ diffLineContent(line, group.part) }}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div v-else-if="testArtifact(group.part)" class="test-result-card" :class="testResultClass(group.part)">
+                        <div class="test-result-head">
+                          <span class="test-result-state">{{ testResultTitle(group.part) }}</span>
+                          <span class="test-result-command">{{ testResultCommand(group.part) }}</span>
+                        </div>
+                        <div class="test-result-meta">
+                          <span v-for="item in testResultMeta(group.part)" :key="item">{{ item }}</span>
+                        </div>
+                        <pre v-if="testResultOutput(group.part)" class="test-result-output">{{ testResultOutput(group.part) }}</pre>
+                      </div>
+                      <!-- Non-file tools: plain code block -->
+                      <div v-else-if="displayToolResult(group.part) && isCommandTool(group.part)" class="command-output">
+                        <strong class="command-output-command">{{ commandDisplayText(group.part) }}</strong>
+                        <pre class="command-output-result">{{ commandOutputText(group.part) }}</pre>
+                      </div>
+                      <div v-else-if="displayToolResult(group.part) && !isFileTool(group.part)" class="tool-output">
+                        <div v-if="toolMetaItems(group.part).length > 0" class="tool-output-meta">
+                          <span v-for="item in toolMetaItems(group.part)" :key="item">{{ item }}</span>
+                        </div>
+                          <pre class="tool-output-content" :class="{ 'tool-output-content--wrap': isToolWrapEnabled(group.part.id) }" @click="toggleToolWrap(group.part.id)">{{ toolOutputContent(group.part) }}</pre>
+                      </div>
+                      <pre v-else-if="readableProcessDetail(group.part)" class="tool-output">{{ readableProcessDetail(group.part) }}</pre>
+                    </div>
+                  </div>
+
+                  <div
+                    v-else-if="group.part.partType === 'model_text'"
+                    class="process-step process-step--model-text"
+                    :class="'process-step--' + group.part.status"
+                  >
+                    <div class="process-text-head">
+                      <span class="process-step-marker" />
+                      <span class="process-step-title">{{ modelTextTitle(group.part) }}</span>
+                    </div>
+                    <div v-if="group.part.content" class="part-text-content process-text-content">{{ group.part.content }}</div>
+                  </div>
+
+                  <div v-else-if="group.part.partType === 'error'" class="process-step process-step--error">
+                    <button
+                      type="button"
+                      class="process-inline-toggle"
+                      @click="togglePartExpand(group.part, false)"
+                    >
+                      <span class="process-step-marker" />
+                      <span class="process-step-title">{{ group.part.label || '出错' }}</span>
+                      <span class="process-step-detail">{{ processDetailPreview(group.part) }}</span>
+                      <span class="tool-expand-chevron">{{ isPartExpanded(group.part, false) ? '▾' : '▸' }}</span>
+                    </button>
+                    <div v-if="isPartExpanded(group.part, false)" class="process-detail-panel process-detail-panel--error">
+                      <button type="button" class="process-detail-copy" @click.stop="copyProcessDetail(group.part)">复制</button>
+                      <pre>{{ fullProcessDetail(group.part) }}</pre>
+                    </div>
+                  </div>
+
+                  <div v-else-if="group.part.partType === 'status'" class="process-step process-step--info" :class="'process-step--' + group.part.status">
+                    <button
+                      v-if="hasExpandableProcessDetail(group.part)"
+                      type="button"
+                      class="process-inline-toggle"
+                      @click="togglePartExpand(group.part, false)"
+                    >
+                      <span class="process-step-marker" />
+                      <span class="process-step-title">{{ group.part.label || '状态' }}</span>
+                      <span class="process-step-detail">{{ processDetailPreview(group.part) }}</span>
+                      <span class="tool-expand-chevron">{{ isPartExpanded(group.part, false) ? '▾' : '▸' }}</span>
+                    </button>
+                    <template v-else>
+                      <span class="process-step-marker" />
+                      <span class="process-step-title">{{ group.part.label || '状态' }}</span>
+                      <span class="process-step-detail">{{ group.part.detail || group.part.content }}</span>
+                    </template>
+                    <div v-if="hasExpandableProcessDetail(group.part) && isPartExpanded(group.part, false)" class="process-detail-panel">
+                      <button type="button" class="process-detail-copy" @click.stop="copyProcessDetail(group.part)">复制</button>
+                      <pre>{{ fullProcessDetail(group.part) }}</pre>
+                    </div>
+                  </div>
+
+                  <div
+                    v-else-if="group.part.partType === 'decision'"
+                    class="decision-card"
+                    :class="'decision-card--' + group.part.status"
+                  >
+                    <div class="decision-card-head">
+                      <span class="process-step-marker" />
+                      <span class="decision-card-title">{{ decisionTitle(group.part) }}</span>
+                      <span class="decision-card-status">{{ decisionStatusLabel(group.part) }}</span>
+                    </div>
+                    <p v-if="decisionDetail(group.part)" class="decision-card-detail">{{ decisionDetail(group.part) }}</p>
+                    <p v-if="decisionResponseText(group.part)" class="decision-card-decision">{{ decisionResponseText(group.part) }}</p>
+                    <div v-if="group.part.status === 'pending' && decisionOptions(group.part).length > 0" class="decision-options">
+                      <button
+                        v-for="option in decisionOptions(group.part)"
+                        :key="option.id"
+                        type="button"
+                        class="decision-option"
+                        @click="emit('decision-select', { partId: group.part.id, option, response: decisionOptionResponse(group.part, option) })"
+                      >
+                        <span class="decision-option-label">{{ option.label }}</span>
+                        <span v-if="option.description" class="decision-option-desc">{{ option.description }}</span>
+                      </button>
+                    </div>
+                    <div v-if="canGuideDecision(group.part)" class="decision-guide">
+                      <span class="decision-guide-label">其他</span>
+                      <textarea
+                        class="decision-guide-input"
+                        :value="decisionGuideDraft(group.part)"
+                        placeholder="其他处理方式..."
+                        rows="2"
+                        @input="updateDecisionGuideDraft(group.part, $event)"
+                      />
+                      <button
+                        type="button"
+                        class="decision-guide-submit"
+                        :disabled="!decisionGuideDraft(group.part).trim()"
+                        @click="submitDecisionGuide(group.part)"
+                      >
+                        执行
+                      </button>
+                    </div>
+                  </div>
+
+                      <div
+                        v-else-if="isSubLinePart(group.part)"
+                        class="sub-line-block"
+                      >
+                        <div class="sub-line-heading">
+                          <span class="process-step-marker" />
+                          <span class="sub-line-title">{{ agentTitle(group.part) }}</span>
+                          <span class="sub-line-status">{{ agentStatusLabel(group.part) }}</span>
+                        </div>
+                        <div v-if="agentDeliveryMeta(group.part).length > 0" class="sub-line-delivery-meta">
+                          <span v-for="item in agentDeliveryMeta(group.part)" :key="item">{{ item }}</span>
+                        </div>
+                        <div class="sub-line-body">
+                            <div v-if="agentAssignmentText(group.part)" class="user-row sub-line-user-row">
+                              <div class="user-bubble sub-line-user-bubble">{{ agentAssignmentText(group.part) }}</div>
+                            </div>
+                            <div v-if="agentTimelineParts(group.part).length > 0" class="sub-line-nested-process">
+                              <template
+                                v-for="itemPart in agentTimelineParts(group.part)"
+                                :key="itemPart.id"
+                              >
+                                <div
+                                  v-if="itemPart.partType === 'reasoning'"
+                                  class="process-step process-step--reasoning"
+                                >
+                                  <button
+                                    type="button"
+                                    class="reasoning-toggle"
+                                    @click="togglePartExpand(itemPart, false)"
+                                  >
+                                    <span class="process-step-marker" />
+                                    <span class="process-step-title">思考</span>
+                                    <span v-if="reasoningDuration(itemPart)" class="reasoning-duration">{{ reasoningDuration(itemPart) }}</span>
+                                    <span class="tool-expand-chevron">{{ isPartExpanded(itemPart, false) ? '▾' : '▸' }}</span>
+                                  </button>
+                                  <div v-if="isPartExpanded(itemPart, false)" class="reasoning-body">
+                                    <slot name="reasoning-content" :content="itemPart.content" :live="false">
+                                      <span class="process-step-detail">{{ itemPart.content }}</span>
+                                    </slot>
+                                  </div>
+                                </div>
+                                <div
+                                  v-else
+                                  class="process-step process-step--tool"
+                                  :class="['process-step--' + itemPart.status, toolColorClass(itemPart)]"
+                                >
+                                  <button
+                                    type="button"
+                                    class="tool-card-header"
+                                    :class="[{ 'has-detail': hasToolDisplay(itemPart) || readableProcessDetail(itemPart) }, toolColorClass(itemPart)]"
+                                    @click="togglePartExpand(itemPart, false)"
+                                  >
+                                    <span class="process-step-marker" />
+                                    <span class="tool-type-tag" :class="toolColorClass(itemPart)">{{ toolTypeLabel(itemPart) }}</span>
+                                    <span class="process-step-title">{{ readableProcessTitle(itemPart) }}</span>
+                                    <span
+                                      v-if="hasToolDisplay(itemPart) || readableProcessDetail(itemPart)"
+                                      class="tool-expand-chevron"
+                                    >{{ isPartExpanded(itemPart, false) ? '▾' : '▸' }}</span>
+                                  </button>
+                                  <div v-if="isPartExpanded(itemPart, false)" class="tool-card-body">
+                                    <pre v-if="displayToolError(itemPart)" class="tool-output tool-output--error">{{ displayToolError(itemPart) }}</pre>
+                                    <div v-else-if="displayToolResult(itemPart) && isFileTool(itemPart)" class="diff-block" :class="[fileDiffClass(itemPart), { 'diff-block--wrap': isToolWrapEnabled(itemPart.id) }]">
+                                      <div class="diff-header">
+                                        <span class="diff-file">{{ diffHeaderText(itemPart) }}</span>
+                                        <button type="button" class="wrap-toggle" @click.stop="toggleToolWrap(itemPart.id)">{{ isToolWrapEnabled(itemPart.id) ? 'wrap' : 'scroll' }}</button>
+                                      </div>
+                                      <div class="diff-lines">
+                                        <div v-for="(line, li) in diffDisplayLines(itemPart)" :key="li" class="diff-line" :class="diffLineClass(line, itemPart)">
+                                          <span class="diff-line-num">{{ diffLineGutter(line, li, itemPart) }}</span>
+                                          <span class="diff-line-content">{{ diffLineContent(line, itemPart) }}</span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                    <div v-else-if="displayToolResult(itemPart) && isCommandTool(itemPart)" class="command-output">
+                                      <strong class="command-output-command">{{ commandDisplayText(itemPart) }}</strong>
+                                      <pre class="command-output-result">{{ commandOutputText(itemPart) }}</pre>
+                                    </div>
+                                    <pre v-else-if="displayToolResult(itemPart)" class="tool-output">{{ toolOutputContent(itemPart) }}</pre>
+                                    <pre v-else-if="readableProcessDetail(itemPart)" class="tool-output">{{ readableProcessDetail(itemPart) }}</pre>
+                                  </div>
+                                </div>
+                              </template>
+                            </div>
+                            <div v-if="agentConclusion(group.part)" class="assistant-answer sub-line-assistant-answer">
+                              <slot name="assistant-content" :content="agentConclusion(group.part)">
+                                <div class="part-text-content">{{ agentConclusion(group.part) }}</div>
+                              </slot>
+                            </div>
+                        </div>
+                      </div>
+
+                  <div
+                    v-else-if="isChecklistPart(group.part)"
+                    class="checklist-card"
+                    :class="'checklist-card--' + group.part.status"
+                  >
+                    <div class="checklist-card-head">
+                      <span class="process-step-marker" />
+                      <span class="process-step-title">{{ controlTitle(group.part) }}</span>
+                    </div>
+                    <ol class="checklist-items">
+                      <li v-for="item in checklistItems(group.part)" :key="item.id" class="checklist-item" :class="'checklist-item--' + item.status">
+                        <span class="checklist-box">{{ item.checked ? '✓' : '' }}</span>
+                        <span class="checklist-text">{{ item.text }}</span>
+                      </li>
+                    </ol>
+                  </div>
+
+                  <div
+                    v-else-if="group.part.partType === 'plan' || group.part.partType === 'todo_update'"
+                    class="process-step process-step--info"
+                    :class="'process-step--' + group.part.status"
+                  >
+                    <span class="process-step-marker" />
+                    <span class="process-step-title">{{ group.part.label || livePartTitle(group.part) }}</span>
+                    <span class="process-step-detail">{{ group.part.detail || group.part.content }}</span>
+                  </div>
+
+                  <div
+                    v-else-if="group.part.partType === 'compaction'"
+                    class="process-step process-step--compaction"
+                    :class="'process-step--' + group.part.status"
+                  >
+                    <button
+                      type="button"
+                      class="compaction-toggle"
+                      :disabled="isSkippedCompaction(group.part)"
+                      @click="!isSkippedCompaction(group.part) && toggleToolExpand(group.part.id)"
+                    >
+                      <span class="process-step-marker" />
+                      <span class="process-step-title">{{ compactionTitle(group.part) }}</span>
+                      <span class="process-step-detail">{{ compactionDetail(group.part) }}</span>
+                      <span v-if="!isSkippedCompaction(group.part)" class="tool-expand-chevron">{{ isToolExpanded(group.part.id) ? '▾' : '▸' }}</span>
+                    </button>
+                    <div v-if="!isSkippedCompaction(group.part) && isToolExpanded(group.part.id)" class="compaction-summary">
+                      <pre class="compaction-summary-text">{{ compactionPreview(group.part) }}</pre>
+                    </div>
+                  </div>
+                </template>
+              </template>
+            </div>
+
+            <!-- Reply text BELOW process (process happens first, then reply) -->
+            <div v-if="!isTimelineMessage(msg) && !isLiveMessage(msg) && answerContent(msg)" class="assistant-answer">
+              <slot name="assistant-content" :content="answerContent(msg)">
+                <div class="part-text-content">{{ answerContent(msg) }}</div>
+              </slot>
+            </div>
+            <template v-else-if="!isTimelineMessage(msg) && !isLiveMessage(msg)">
+              <div
+                v-for="(group, gi) in textGroups(msg.parts)"
+                :key="'txt-' + gi"
+                class="assistant-answer"
+              >
+                <slot name="assistant-content" :content="group.content">
+                  <div class="part-text-content">{{ group.content }}</div>
+                </slot>
+              </div>
+            </template>
+          </template>
+
+          <!-- Fallback: no parts → render flat content -->
+          <slot v-else name="assistant-content" :content="answerContent(msg)">
+            <div class="assistant-answer">{{ answerContent(msg) }}</div>
+          </slot>
+
+          <!-- Message footer slot (for global stats line etc.) -->
+          <slot name="message-footer" :message="msg" />
+        </div>
+      </div>
+    </template>
+
+    <slot name="tail" />
+  </div>
+</template>
+
+<script setup lang="ts">
+import type { CoreAttachment, CoreMessage, MessagePart, MessagePartStatus } from '../types'
+import { computed, defineComponent, h, onBeforeUnmount, ref, watch } from 'vue'
+
+const STREAM_BASE_CHARS_PER_SECOND = 44
+const STREAM_FAST_CHARS_PER_SECOND = 96
+const STREAM_CATCH_UP_THRESHOLD = 80
+const STREAM_MAX_FRAME_CHARS = 6
+const STREAM_MAX_ELAPSED_MS = 120
+const STREAM_FIRST_PAINT_CHARS = 1
+
+function streamCharLength(value: string): number {
+  return Array.from(value).length
+}
+
+function streamSlice(value: string, end: number): string {
+  return Array.from(value).slice(0, end).join('')
+}
+
+const AnimatedStreamText = defineComponent({
+  name: 'AnimatedStreamText',
+  props: {
+    textKey: { type: String, required: true },
+    text: { type: String, default: '' },
+    active: { type: Boolean, default: false },
+  },
+  setup(componentProps, { slots }) {
+    const displayText = ref(componentProps.active ? '' : componentProps.text)
+    const targetText = ref(componentProps.text)
+    const carry = ref(0)
+    const lastFrameAt = ref(0)
+    const frameId = ref<number | null>(null)
+    const canAnimate = typeof window !== 'undefined'
+      && typeof window.matchMedia === 'function'
+      && typeof window.requestAnimationFrame === 'function'
+      && typeof window.cancelAnimationFrame === 'function'
+    const reducedMotion = canAnimate
+      ? window.matchMedia('(prefers-reduced-motion: reduce)')
+      : null
+
+    const animating = computed(() => (
+      componentProps.active
+      && !reducedMotion?.matches
+      && streamCharLength(displayText.value) < streamCharLength(targetText.value)
+      && targetText.value.startsWith(displayText.value)
+    ))
+
+    function stopFrame() {
+      if (frameId.value !== null && canAnimate) {
+        window.cancelAnimationFrame(frameId.value)
+      }
+      frameId.value = null
+      lastFrameAt.value = 0
+      carry.value = 0
+    }
+
+    function revealFrame(now: number) {
+      frameId.value = null
+      if (!componentProps.active || !canAnimate || reducedMotion?.matches) {
+        displayText.value = targetText.value
+        stopFrame()
+        return
+      }
+      if (!targetText.value.startsWith(displayText.value)) {
+        displayText.value = targetText.value
+        stopFrame()
+        return
+      }
+      const displayLength = streamCharLength(displayText.value)
+      const targetLength = streamCharLength(targetText.value)
+      const backlog = targetLength - displayLength
+      if (backlog <= 0) {
+        stopFrame()
+        return
+      }
+
+      const elapsed = lastFrameAt.value > 0
+        ? Math.min(STREAM_MAX_ELAPSED_MS, Math.max(0, now - lastFrameAt.value))
+        : 16
+      lastFrameAt.value = now
+      const rate = backlog > STREAM_CATCH_UP_THRESHOLD
+        ? STREAM_FAST_CHARS_PER_SECOND
+        : STREAM_BASE_CHARS_PER_SECOND
+      carry.value += (elapsed / 1000) * rate
+      const take = Math.min(STREAM_MAX_FRAME_CHARS, Math.max(1, Math.floor(carry.value)))
+      carry.value = Math.max(0, carry.value - take)
+      displayText.value = streamSlice(targetText.value, Math.min(targetLength, displayLength + take))
+      scheduleFrame()
+    }
+
+    function scheduleFrame() {
+      if (frameId.value !== null || !canAnimate) return
+      frameId.value = window.requestAnimationFrame(revealFrame)
+    }
+
+    watch(
+      () => [componentProps.textKey, componentProps.text, componentProps.active] as const,
+      ([nextKey, nextText, active], previousValue) => {
+        const previousKey = previousValue?.[0] || ''
+        targetText.value = nextText || ''
+        if (nextKey !== previousKey) {
+          displayText.value = ''
+        }
+        if (!active || !canAnimate || reducedMotion?.matches) {
+          displayText.value = targetText.value
+          stopFrame()
+          return
+        }
+        if (!targetText.value.startsWith(displayText.value)) {
+          displayText.value = ''
+        }
+        if (!displayText.value && targetText.value) {
+          displayText.value = streamSlice(targetText.value, STREAM_FIRST_PAINT_CHARS)
+        }
+        if (streamCharLength(targetText.value) > streamCharLength(displayText.value)) {
+          scheduleFrame()
+        }
+      },
+      { immediate: true },
+    )
+
+    onBeforeUnmount(stopFrame)
+
+    return () => {
+      const slot = slots.default
+      if (slot) {
+        return slot({ text: displayText.value, animating: animating.value })
+      }
+      return h('span', displayText.value)
+    }
+  },
+})
+
+const props = withDefaults(
+  defineProps<{
+    messages: CoreMessage[]
+    assistantLabel?: string
+    /** Set of message ids whose process section is expanded */
+    processExpandedIds?: Set<string>
+  }>(),
+  {
+    assistantLabel: 'Assistant',
+    processExpandedIds: () => new Set(),
+  },
+)
+
+const emit = defineEmits<{
+  'toggle-process': [messageId: string]
+  'decision-select': [payload: { partId: string; option: DecisionOption; response: string }]
+}>()
+
+const decisionGuideDrafts = ref<Record<string, string>>({})
+
+// ── Helpers ──
+
+interface DecisionOption {
+  id: string
+  label: string
+  description?: string
+  response?: string
+}
+
+interface AgentTimelineItem {
+  id: string
+  title: string
+  detail: string
+  status: string
+  kind: 'reasoning' | 'tool' | 'step' | 'conclusion'
+  toolName?: string
+  toolArgs?: Record<string, unknown>
+  toolResult?: string
+  toolError?: string
+  artifacts?: MessagePart['artifacts']
+  metadata?: Record<string, unknown>
+}
+
+interface AgentSubstep {
+  label: string
+  value: string
+  status: string
+}
+
+interface ChecklistItem {
+  id: string
+  text: string
+  status: string
+  checked: boolean
+}
+
+const toolExpandedIds = ref<Set<string>>(new Set())
+const toolCollapsedIds = ref<Set<string>>(new Set())
+const toolWrapIds = ref<Set<string>>(new Set())
+
+function toggleToolExpand(partId: string) {
+  const next = new Set(toolExpandedIds.value)
+  if (next.has(partId)) {
+    next.delete(partId)
+  } else {
+    next.add(partId)
+  }
+  toolExpandedIds.value = next
+}
+
+function togglePartExpand(part: MessagePart, live = false) {
+  const defaultExpanded = isDefaultExpandedPart(part, live)
+  const partId = part.id
+  if (defaultExpanded) {
+    const next = new Set(toolCollapsedIds.value)
+    if (next.has(partId)) {
+      next.delete(partId)
+    } else {
+      next.add(partId)
+    }
+    toolCollapsedIds.value = next
+    return
+  }
+
+  toggleToolExpand(partId)
+}
+
+function isToolExpanded(partId: string): boolean {
+  return toolExpandedIds.value.has(partId)
+}
+
+function isPartExpanded(part: MessagePart, live = false): boolean {
+  if (isDefaultExpandedPart(part, live)) return !toolCollapsedIds.value.has(part.id)
+  return toolExpandedIds.value.has(part.id)
+}
+
+function isDefaultExpandedPart(part: MessagePart, live = false): boolean {
+  if (live) return true
+  if (part.partType === 'reasoning') return true
+  if (part.partType === 'error') return true
+  if (isSubLinePart(part)) return true
+  return false
+}
+
+function isSubLinePart(part: MessagePart): boolean {
+  return part.partType === 'sub_line' || part.partType === 'agent_summary'
+}
+
+function attachmentParts(message: CoreMessage): MessagePart[] {
+  return (message.parts || []).filter(part => part.partType === 'attachment')
+}
+
+function attachmentFromPart(part: MessagePart): CoreAttachment | null {
+  const raw = part.metadata?.attachment
+  if (!raw || typeof raw !== 'object') return null
+  return raw as CoreAttachment
+}
+
+function attachmentName(part: MessagePart): string {
+  const attachment = attachmentFromPart(part)
+  return attachment?.label || attachment?.filename || part.label || 'attachment'
+}
+
+function attachmentKind(part: MessagePart): string {
+  const attachment = attachmentFromPart(part)
+  const previewType = String(attachment?.preview_type || '').toLowerCase()
+  if (previewType === 'image') return 'IMG'
+  if (previewType === 'pdf') return 'PDF'
+  if (previewType === 'text') return 'TXT'
+  return 'FILE'
+}
+
+function toggleToolWrap(partId: string) {
+  const next = new Set(toolWrapIds.value)
+  if (next.has(partId)) next.delete(partId)
+  else next.add(partId)
+  toolWrapIds.value = next
+}
+
+function isToolWrapEnabled(partId: string): boolean {
+  return toolWrapIds.value.has(partId)
+}
+
+function hasToolDisplay(part: MessagePart): boolean {
+  return Boolean(displayToolResult(part) || displayToolError(part) || readableProcessDetail(part))
+}
+
+function shouldShowToolBody(part: MessagePart, live = false): boolean {
+  if (!hasToolDisplay(part)) return false
+  return isPartExpanded(part, live)
+}
+
+function contextGroupId(group: PartGroupContext): string {
+  return `context-${group.items.map(item => item.id).join('-')}`
+}
+
+function reasoningDuration(part: MessagePart, live = false): string {
+  if (!part.startedAt) return ''
+  if (!part.completedAt && (!live || part.status !== 'running')) return ''
+  const start = new Date(part.startedAt).getTime()
+  const end = part.completedAt ? new Date(part.completedAt).getTime() : Date.now()
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return ''
+  const seconds = Math.round((end - start) / 1000)
+  if (seconds < 1) return ''
+  return `Thought for ${seconds}s`
+}
+
+function toolArgsPreview(args: Record<string, unknown>): string {
+  const chips = toolArgChips(args)
+  if (chips.length > 0) return chips.join(' · ')
+
+  const entries = Object.entries(args).filter(([, v]) => v != null && v !== '')
+  if (entries.length === 0) return ''
+  const parts = entries.slice(0, 3).map(([k, v]) => {
+    const val = typeof v === 'string' ? v : JSON.stringify(v)
+    const truncated = val.length > 40 ? val.slice(0, 40) + '…' : val
+    return `${k}: ${truncated}`
+  })
+  const more = entries.length > 3 ? ` +${entries.length - 3}` : ''
+  return `(${parts.join(', ')}${more})`
+}
+
+function toolArgChips(args: Record<string, unknown>): string[] {
+  const chips: string[] = []
+  const file = args.path || args.file || args.file_path
+  if (file) chips.push(`文件 ${compactPath(String(file))}`)
+
+  const start = args.start_line || args.startLine || args.line_start
+  const end = args.end_line || args.endLine || args.line_end
+  if (start && end) chips.push(`范围 ${start}-${end} 行`)
+  else if (start) chips.push(`从第 ${start} 行`)
+
+  const pattern = args.pattern || args.query
+  if (pattern && !file) chips.push(`搜索 ${compactDetail(String(pattern), 44)}`)
+
+  const command = args.command || args.cmd
+  if (command) chips.push(`命令 ${compactDetail(String(command), 64)}`)
+
+  return chips
+}
+
+function toolTypeLabel(part: MessagePart): string {
+  if (isUnavailableToolNotice(part)) return 'WARN'
+  if (isControlTool(part)) return 'PROC'
+  const name = (part.toolName || '').toLowerCase()
+  return name || 'tool'
+}
+
+function toolColorClass(part: MessagePart): string {
+  if (isUnavailableToolNotice(part)) return 'tool-color--warn'
+  if (isControlTool(part)) return 'tool-color--default'
+  const name = (part.toolName || '').toLowerCase()
+  if (name.includes('browser') || name.includes('web') || name.includes('fetch') || name.includes('http')) return 'tool-color--web'
+  if (name.includes('read') || name.includes('list') || name.includes('glob') || name.includes('grep') || name.includes('search')) return 'tool-color--read'
+  if (name.includes('write') || name.includes('edit') || name.includes('patch') || name.includes('create')) return 'tool-color--write'
+  if (name.includes('command') || name.includes('run') || name.includes('exec') || name.includes('bash')) return 'tool-color--exec'
+  if (name.includes('git') || name.includes('commit') || name.includes('branch')) return 'tool-color--git'
+  if (name.includes('test') || name.includes('verify') || name.includes('check')) return 'tool-color--test'
+  if (name.includes('delete') || name.includes('remove')) return 'tool-color--del'
+  return 'tool-color--default'
+}
+
+function showProcessKindTag(part: MessagePart): boolean {
+  return part.partType !== 'reasoning' && part.partType !== 'plan' && part.partType !== 'todo_update' && part.partType !== 'compaction'
+}
+
+function processKindLabel(part: MessagePart): string {
+  if (part.partType === 'decision') return 'ASK'
+  if (isSubLinePart(part)) return 'SUB'
+  if (part.partType === 'compaction') return 'CTX'
+  if (isControlTool(part)) return 'PROC'
+  if (part.partType === 'error') return 'ERR'
+  if (part.partType === 'file_diff') return 'DIFF'
+  if (part.partType === 'command_output') return 'EXEC'
+  if (part.partType === 'tool_call' || part.partType === 'tool_result') return toolTypeLabel(part)
+  return 'INFO'
+}
+
+function processColorClass(part: MessagePart): string {
+  if (part.partType === 'decision') return 'tool-color--web'
+  if (isSubLinePart(part)) return 'tool-color--git'
+  if (part.partType === 'compaction') return 'tool-color--default'
+  if (isControlTool(part)) return 'tool-color--default'
+  if (part.partType === 'error') return 'tool-color--del'
+  if (part.partType === 'file_diff') return 'tool-color--write'
+  if (part.partType === 'command_output') return 'tool-color--exec'
+  return toolColorClass(part)
+}
+
+function isFileTool(part: MessagePart): boolean {
+  if (unavailableToolName(part)) return false
+  if (fileArtifact(part)) return true
+  const name = (part.toolName || '').toLowerCase()
+  return /read_file|write_file|edit_file|create_file|delete_range|list_dir|glob|grep|search_content/.test(name)
+}
+
+function fileDiffClass(part: MessagePart): string {
+  const name = (part.toolName || '').toLowerCase()
+  if (/write_file|edit_file|create_file/.test(name)) return 'diff-block--write'
+  if (/read_file|list_dir|glob|grep|search_content/.test(name)) return 'diff-block--read'
+  return ''
+}
+
+function isUnifiedDiff(part: MessagePart): boolean {
+  const result = displayToolResult(part)
+  return /^@@\s+-\d/m.test(result) || /^\+\+\+\s+/m.test(result) || /^---\s+/m.test(result)
+}
+
+function diffLineClass(line: string, part: MessagePart): string {
+  if (!isUnifiedDiff(part)) return ''
+  if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@')) return 'diff-line--meta'
+  if (line.startsWith('+')) return 'diff-line--add'
+  if (line.startsWith('-')) return 'diff-line--del'
+  return ''
+}
+
+function diffDisplayLines(part: MessagePart): string[] {
+  const lines = displayToolResult(part).split('\n')
+  if (!isUnifiedDiff(part)) return lines
+  return lines.filter(line => !line.startsWith('+++ ') && !line.startsWith('--- '))
+}
+
+function diffLineGutter(line: string, index: number, part: MessagePart): string {
+  if (!isUnifiedDiff(part)) return String(index + 1)
+  if (line.startsWith('+') && !line.startsWith('+++')) return '+'
+  if (line.startsWith('-') && !line.startsWith('---')) return '-'
+  return ''
+}
+
+function diffLineContent(line: string, part: MessagePart): string {
+  if (!isUnifiedDiff(part)) return line
+  if (line.startsWith('+') && !line.startsWith('+++')) return line.slice(1)
+  if (line.startsWith('-') && !line.startsWith('---')) return line.slice(1)
+  return humanizeDiffMetaLine(line)
+}
+
+function humanizeDiffMetaLine(line: string): string {
+  const match = line.match(/^@@\s+-(\d+),?(\d*)\s+\+(\d+),?(\d*)\s+@@/)
+  if (!match) return line
+  const oldCount = Number(match[2] || 1)
+  const newCount = Number(match[4] || 1)
+  if (oldCount === 0 && newCount > 0) return `新增 ${newCount} 行`
+  if (newCount === 0 && oldCount > 0) return `删除 ${oldCount} 行`
+  return `修改范围：原 ${match[1]} 行起，新 ${match[3]} 行起`
+}
+
+function diffHeaderText(part: MessagePart): string {
+  const artifact = fileArtifact(part)
+  const artifactPath = String(artifact?.metadata?.path || artifact?.uri || '')
+  if (artifactPath) return artifactPath
+  const args = part.toolArgs || {}
+  // file path
+  const path = String(args.path || args.file || args.file_path || '')
+  if (path) return path
+  const result = displayToolResult(part)
+  const diffPath = result.match(/^\+\+\+\s+b\/(.+)$/m) || result.match(/^---\s+a\/(.+)$/m)
+  if (diffPath?.[1]) return diffPath[1]
+  // command
+  const cmd = args.command || args.cmd || ''
+  if (cmd) {
+    const cmdArgs = Array.isArray(args.args) ? args.args.join(' ') : ''
+    return cmdArgs ? `${cmd} ${cmdArgs}` : String(cmd)
+  }
+  // run_command may have the command as first positional arg
+  if (typeof args === 'object') {
+    const vals = Object.values(args).filter(v => typeof v === 'string' && v.length > 0 && v.length < 200)
+    if (vals.length > 0) return String(vals[0])
+  }
+  return part.toolName || ''
+}
+
+function isLiveMessage(msg: CoreMessage): boolean {
+  return !!(msg.metadata as Record<string, unknown>)?.live
+}
+
+function isInitialWaitingMessage(msg: CoreMessage): boolean {
+  return !!(msg.metadata as Record<string, unknown>)?.initialWaiting
+}
+
+function isTimelineMessage(msg: CoreMessage): boolean {
+  return !!(msg.metadata as Record<string, unknown>)?.timeline
+}
+
+function timelineParts(msg: CoreMessage): MessagePart[] {
+  return msg.parts || []
+}
+
+function systemBubbleClass(msg: CoreMessage): string {
+  const meta = (msg.metadata || {}) as Record<string, unknown>
+  if (meta.systemKind === 'error' || meta.systemKind === 'failed') return 'system-bubble--error'
+  if (meta.systemKind === 'done' || meta.systemKind === 'completed') return 'system-bubble--done'
+  if (meta.systemKind === 'waiting') return 'system-bubble--waiting'
+  return 'system-bubble--info'
+}
+
+function systemIcon(msg: CoreMessage): string {
+  const meta = (msg.metadata || {}) as Record<string, unknown>
+  if (meta.systemKind === 'error' || meta.systemKind === 'failed') return '✕'
+  if (meta.systemKind === 'done' || meta.systemKind === 'completed') return '✓'
+  if (meta.systemKind === 'waiting') return '⏳'
+  return 'ℹ'
+}
+
+function isProcessExpanded(msg: CoreMessage): boolean {
+  // During live streaming: auto-expand so user sees process unfolding (like GPT)
+  if (isLiveMessage(msg)) return true
+  // Completed process is collapsed by default; user can reopen it explicitly.
+  return props.processExpandedIds?.has(msg.id) ?? false
+}
+
+function isControlTool(part: MessagePart): boolean {
+  const name = (part.toolName || part.label || '').toLowerCase()
+  return /decision_point|write_checklist|update_checklist|verify_design|ask_clarification|chat_only|self_critique/.test(name)
+}
+
+// ── Part Grouping (process parts only; text comes from msg.content) ──
+
+interface PartGroupProcess {
+  kind: 'process'
+  part: MessagePart
+}
+
+interface PartGroupContext {
+  kind: 'context-group'
+  status: MessagePartStatus
+  label: string
+  detail: string
+  items: MessagePart[]
+}
+
+type PartGroup = PartGroupProcess | PartGroupContext
+
+interface TextGroup {
+  content: string
+}
+
+interface LiveProcessItem {
+  id: string
+  title: string
+  detail: string
+  status: MessagePartStatus
+  compact: boolean
+}
+
+function liveStatusText(msg: CoreMessage): string {
+  const metadata = (msg.metadata || {}) as Record<string, unknown>
+  return String(metadata.liveStatus || metadata.statusText || '正在处理')
+}
+
+function liveDetailText(msg: CoreMessage): string {
+  const metadata = (msg.metadata || {}) as Record<string, unknown>
+  return String(metadata.liveDetail || metadata.detail || '').trim()
+}
+
+function hasAnswerContent(msg: CoreMessage): boolean {
+  if (String(msg.content || '').trim()) return true
+  return textGroups(msg.parts || []).some(group => group.content.trim())
+}
+
+function answerContent(msg: CoreMessage): string {
+  return String(msg.content || '').trim()
+}
+
+function liveProcessItems(msg: CoreMessage): LiveProcessItem[] {
+  const parts = msg.parts || []
+  if (hasAnswerContent(msg)) {
+    return parts
+      .filter(isHighValueLivePart)
+      .map((part): LiveProcessItem => ({
+        id: part.id,
+        title: livePartTitle(part),
+        detail: livePartDetail(part),
+        status: part.status,
+        compact: part.status === 'completed',
+      }))
+      .slice(-8)
+  }
+
+  const groups = groupParts(parts)
+  const items = groups.map((group): LiveProcessItem => {
+    if (group.kind === 'context-group') {
+      return {
+        id: `context-${group.items.map((item) => item.id).join('-')}`,
+        title: group.label,
+        detail: group.detail,
+        status: group.status,
+        compact: group.status === 'completed',
+      }
+    }
+    return {
+      id: group.part.id,
+      title: livePartTitle(group.part),
+      detail: livePartDetail(group.part),
+      status: group.part.status,
+      compact: group.part.status === 'completed',
+    }
+  })
+  return items.slice(-8)
+}
+
+function isHighValueLivePart(part: MessagePart): boolean {
+  if (isLowValueControlResult(part, String(part.detail || part.content || part.toolResult || ''))) return false
+  if (part.partType === 'text' || part.partType === 'reasoning' || part.partType === 'model_text' || part.partType === 'plan' || part.partType === 'todo_update') {
+    return false
+  }
+  if (part.partType === 'status') return true
+  if (part.partType === 'compaction') return true
+  if (part.partType === 'tool_call' || part.partType === 'tool_result' || part.partType === 'file_diff' || part.partType === 'command_output') {
+    return true
+  }
+  if (isSubLinePart(part) || part.partType === 'decision' || part.partType === 'error') {
+    return true
+  }
+  return Boolean(part.toolName || part.toolResult || part.toolError)
+}
+
+function livePartTitle(part: MessagePart): string {
+  if (part.label) return part.label
+  if (part.toolName) return part.toolName
+  const map: Partial<Record<MessagePart['partType'], string>> = {
+    reasoning: '思考',
+    model_text: '正文',
+    tool_call: '调用工具',
+    tool_result: '工具返回',
+    file_diff: '文件改动',
+    command_output: '命令输出',
+    plan: '规划',
+    todo_update: '更新任务',
+    status: '状态',
+    error: '出错',
+    decision: '等待确认',
+    sub_line: '过程',
+    agent_summary: '过程',
+    compaction: '上下文已压缩',
+  }
+  return map[part.partType] || '处理中'
+}
+
+function livePartDetail(part: MessagePart): string {
+  const detail = String(part.detail || part.content || part.toolError || part.toolResult || '').trim()
+  if (detail) return detail
+  if (part.toolArgs && Object.keys(part.toolArgs).length > 0) return toolArgsPreview(part.toolArgs)
+  return ''
+}
+
+function modelTextTitle(part: MessagePart): string {
+  const label = String(part.label || '').trim()
+  if (!label) return '正文'
+  const normalized = label.toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ')
+  if (normalized === 'model text' || normalized === 'agent message' || normalized === 'agentmessage') {
+    return '正文'
+  }
+  return label
+}
+
+function readableProcessTitle(part: MessagePart): string {
+  const unavailableTool = unavailableToolName(part)
+  if (unavailableTool) return `工具不可用：${unavailableTool}`
+  if (isUnavailableToolNotice(part)) return '工具不可用'
+  if (part.partType === 'decision') return decisionTitle(part)
+  if (isSubLinePart(part)) return agentTitle(part)
+  if (part.partType === 'compaction') return part.label || '上下文已压缩'
+  if (isControlTool(part)) return controlTitle(part)
+  if (part.partType === 'error') return part.label || '出错'
+  if (part.partType === 'status') return part.label || '状态'
+  if (part.partType === 'model_text') return modelTextTitle(part)
+  if (part.partType === 'reasoning') return part.label || '思考'
+  if (part.partType === 'file_diff') return part.label || '文件改动'
+  if (part.partType === 'command_output') return part.label || '命令输出'
+
+  if (part.partType === 'tool_call' || part.partType === 'tool_result') {
+    const target = processTarget(part)
+    const name = (part.toolName || part.label || '').toLowerCase()
+    if (/command|shell|exec|bash|powershell|run|npm|python/.test(name)) return target ? `命令 ${target}` : part.toolName || '命令'
+    return part.toolName || part.label || livePartTitle(part)
+  }
+
+  const target = processTarget(part)
+  const name = (part.toolName || part.label || '').toLowerCase()
+  if (/read|cat|get-content|open/.test(name)) return target ? `读取 ${target}` : '读取文件'
+  if (/list|ls|dir/.test(name)) return target ? `列出 ${target}` : '列出目录'
+  if (/grep|rg|search|find|glob/.test(name)) return target ? `搜索 ${target}` : '搜索内容'
+  if (/write|edit|patch|create|apply/.test(name)) return target ? `修改 ${target}` : '修改文件'
+  if (/delete|remove/.test(name)) return target ? `删除 ${target}` : '删除内容'
+  if (/command|shell|exec|bash|powershell|run|npm|python/.test(name)) return target ? `命令 ${target}` : '命令'
+  if (/agent|subagent/.test(name)) return target ? `Agent：${target}` : 'Agent'
+  return part.label || part.toolName || livePartTitle(part)
+}
+
+function readableProcessDetail(part: MessagePart): string {
+  const unavailableTool = unavailableToolName(part)
+  if (unavailableTool) return unavailableToolMessage(unavailableTool)
+
+  const error = String(part.toolError || '').trim()
+  if (error) return error
+
+  const result = String(part.detail || part.content || part.toolResult || '').trim()
+  if (!result) return ''
+  if (isLowValueControlResult(part, result)) return ''
+  const title = readableProcessTitle(part)
+  if (result === title || result === part.label || result === part.toolName) return ''
+  if (part.partType === 'tool_call' || part.partType === 'tool_result') return result
+  if (part.partType === 'compaction') return compactionDetail(part)
+  return compactDetail(result)
+}
+
+function fullProcessDetail(part: MessagePart): string {
+  return String(part.detail || part.content || part.toolError || part.toolResult || '').trim()
+}
+
+function processDetailPreview(part: MessagePart): string {
+  const detail = fullProcessDetail(part)
+  return detail ? compactDetail(detail, 180) : readableProcessDetail(part)
+}
+
+function hasExpandableProcessDetail(part: MessagePart): boolean {
+  if (part.partType !== 'error' && part.partType !== 'status') return false
+  return Boolean(fullProcessDetail(part))
+}
+
+async function copyProcessDetail(part: MessagePart) {
+  const detail = fullProcessDetail(part)
+  if (!detail) return
+  try {
+    await navigator.clipboard?.writeText(detail)
+  } catch {
+    // Clipboard can be unavailable in embedded desktop contexts.
+  }
+}
+
+function compactionDetail(part: MessagePart): string {
+  const metadata = part.metadata || {}
+  const rawPart = part as unknown as Record<string, unknown>
+  if (isSkippedCompaction(part)) {
+    return String(rawPart.message || rawPart.reason || metadata.message || metadata.reason || '').trim()
+  }
+  const before = rawPart.before_tokens ?? rawPart.beforeTokens ?? metadata.before_tokens ?? metadata.beforeTokens
+  const after = rawPart.after_tokens ?? rawPart.afterTokens ?? metadata.after_tokens ?? metadata.afterTokens
+  const removed = rawPart.removed_messages ?? rawPart.removedMessages ?? metadata.removed_messages ?? metadata.removedMessages
+  const pieces: string[] = []
+  if (typeof before === 'number' && typeof after === 'number') {
+    pieces.push(`${before} -> ${after} tokens`)
+  } else if (part.detail) {
+    pieces.push(String(part.detail))
+  }
+  if (typeof removed === 'number' && removed > 0) pieces.push(`${removed} 条消息`)
+  pieces.push('点击查看摘要')
+  return pieces.join(' · ')
+}
+
+function isSkippedCompaction(part: MessagePart): boolean {
+  const metadata = part.metadata || {}
+  const rawPart = part as unknown as Record<string, unknown>
+  return String(rawPart.compaction_status || rawPart.compactionStatus || metadata.compaction_status || metadata.compactionStatus || '').trim() === 'skipped'
+}
+
+function compactionTitle(part: MessagePart): string {
+  const label = String(part.label || '').trim()
+  return label && label.toLowerCase() !== 'compaction' ? label : '上下文已压缩'
+}
+
+function compactionPreview(part: MessagePart): string {
+  if (isSkippedCompaction(part)) return ''
+  const raw = String(part.content || part.detail || '').trim()
+  if (!raw) return '摘要内容为空。'
+  const lines = raw.split(/\r?\n/)
+  const visibleLines = lines.slice(0, 10)
+  let preview = visibleLines.join('\n')
+  const maxChars = 1200
+  if (preview.length > maxChars) preview = preview.slice(0, maxChars).trimEnd()
+  if (lines.length > visibleLines.length || raw.length > preview.length) {
+    preview += '\n...\n内容较长，已折叠显示。'
+  }
+  return preview
+}
+
+function displayToolResult(part: MessagePart): string {
+  const artifactText = fileArtifactContent(part)
+  if (artifactText) return artifactText
+  const raw = sanitizeUnavailableToolText(String(part.toolResult || (isWriteTool(part) ? part.detail || part.content || '' : ''))).trim()
+  if (!raw) return ''
+  return formatWritePreviewAsDiff(part, raw)
+}
+
+function isCommandTool(part: MessagePart): boolean {
+  const name = String(part.toolName || part.label || '').toLowerCase()
+  return part.partType === 'command_output' || /command|shell|exec|bash|powershell|run_command/.test(name)
+}
+
+function commandDisplayText(part: MessagePart): string {
+  const args = part.toolArgs || {}
+  const direct = args.command || args.cmd
+  if (direct) return String(direct)
+  const meta = splitToolOutput(displayToolResult(part) || readableProcessDetail(part)).meta
+  const commandMeta = meta.split(' · ').find(item => item.trim().startsWith('命令 '))
+  if (commandMeta) return commandMeta.replace(/^命令\s*/, '').trim()
+  return readableProcessTitle(part)
+}
+
+function commandOutputText(part: MessagePart): string {
+  const output = splitToolOutput(displayToolResult(part) || readableProcessDetail(part)).content.trim()
+  return output || '[no output]'
+}
+
+function displayToolError(part: MessagePart): string {
+  return sanitizeUnavailableToolText(String(part.toolError || '')).trim()
+}
+
+function toolOutputContent(part: MessagePart): string {
+  const text = displayToolResult(part) || readableProcessDetail(part)
+  return splitToolOutput(text).content
+}
+
+function toolMetaText(part: MessagePart): string {
+  const text = displayToolResult(part) || readableProcessDetail(part)
+  const meta = splitToolOutput(text).meta
+  const artifactMeta = fileArtifactMetaText(part)
+  const argsMeta = part.toolArgs ? toolArgsPreview(part.toolArgs) : ''
+  return [argsMeta, artifactMeta, meta].filter(Boolean).join(' · ')
+}
+
+function toolMetaItems(part: MessagePart): string[] {
+  return toolMetaText(part).split(' · ').map(item => item.trim()).filter(Boolean)
+}
+
+function fileArtifact(part: MessagePart) {
+  return part.artifacts?.find(artifact => artifact.kind === 'file_change' || artifact.kind === 'file_read')
+}
+
+function fileArtifactContent(part: MessagePart): string {
+  const artifact = fileArtifact(part)
+  return typeof artifact?.content === 'string' ? artifact.content.trim() : ''
+}
+
+function fileArtifactMetaText(part: MessagePart): string {
+  const artifact = fileArtifact(part)
+  const meta = artifact?.metadata || {}
+  const segments: string[] = []
+  const action = String(meta.action || '')
+  if (action === 'create') segments.push('新增')
+  else if (action === 'overwrite') segments.push('覆盖')
+  else if (action === 'edit') segments.push('编辑')
+  const lineCount = meta.line_count ?? meta.new_line_count
+  if (typeof lineCount === 'number') segments.push(`${lineCount} 行`)
+  if (typeof meta.size_bytes === 'number') segments.push(`${meta.size_bytes} B`)
+  if (meta.truncated === true) segments.push('已截断')
+  return segments.join(' · ')
+}
+
+function testArtifact(part: MessagePart) {
+  return part.artifacts?.find(artifact => artifact.kind === 'test_result')
+}
+
+function testArtifactMetadata(part: MessagePart): Record<string, unknown> {
+  return testArtifact(part)?.metadata || {}
+}
+
+function testResultClass(part: MessagePart): string {
+  const meta = testArtifactMetadata(part)
+  return meta.passed === true ? 'test-result-card--passed' : 'test-result-card--failed'
+}
+
+function testResultTitle(part: MessagePart): string {
+  const meta = testArtifactMetadata(part)
+  if (meta.passed === true) return '测试通过'
+  if (meta.summary === 'timed_out') return '测试超时'
+  return '测试失败'
+}
+
+function testResultCommand(part: MessagePart): string {
+  const command = testArtifactMetadata(part).command || part.toolArgs?.command || ''
+  return command ? compactDetail(String(command), 120) : '未提供命令'
+}
+
+function testResultMeta(part: MessagePart): string[] {
+  const meta = testArtifactMetadata(part)
+  const items: string[] = []
+  if (meta.exit_code !== undefined && meta.exit_code !== null) items.push(`退出码 ${meta.exit_code}`)
+  if (typeof meta.duration_seconds === 'number') items.push(`${meta.duration_seconds.toFixed(2)} 秒`)
+  if (meta.timed_out === true) items.push('超时')
+  return items
+}
+
+function testResultOutput(part: MessagePart): string {
+  const artifact = testArtifact(part)
+  if (typeof artifact?.content === 'string' && artifact.content.trim()) return artifact.content.trim()
+  return toolOutputContent(part)
+}
+
+function splitToolOutput(text: string): { content: string; meta: string } {
+  const lines = String(text || '').split(/\r?\n/)
+  const meta: string[] = []
+  const content: string[] = []
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (/^\[file:\s*.+\]$/i.test(trimmed)) {
+      meta.push(formatToolMeta(trimmed.slice(1, -1)))
+    } else if (/^\[END OF FILE\b.+\]$/i.test(trimmed)) {
+      meta.push(formatToolMeta(trimmed.slice(1, -1)))
+    } else if (/^\[(exit_code|duration_seconds|timed_out|command|cwd)\b[:\]\s]/i.test(trimmed)) {
+      meta.push(formatToolMeta(bracketMetaPayload(trimmed)))
+    } else {
+      content.push(line)
+    }
+  }
+  return {
+    content: content.join('\n').trim(),
+    meta: meta.join(' · '),
+  }
+}
+
+function bracketMetaPayload(line: string): string {
+  const match = line.match(/^\[([^\]]+)\]\s*(.*)$/)
+  if (match) return `${match[1]} ${match[2]}`.trim()
+  return line.replace(/^\[/, '').replace(/\]$/, '')
+}
+
+function formatToolMeta(meta: string): string {
+  return meta
+    .replace(/^file:\s*/i, '文件 · ')
+    .replace(/^END OF FILE\b\s*[—-]?\s*/i, '文件结束 · ')
+    .replace(/^exit_code[:\]\s]*/i, '退出码 ')
+    .replace(/^duration_seconds[:\]\s]*/i, '耗时 ')
+    .replace(/^timed_out[:\]\s]*/i, '超时 ')
+    .replace(/^command[:\]\s]*/i, '命令 ')
+    .replace(/^cwd[:\]\s]*/i, '目录 ')
+    .replace(/\blines\b/g, '行')
+    .replace(/\bmodified\b/g, '修改于')
+    .replace(/\bbytes read successfully\b/g, '字节读取完成')
+}
+
+function unavailableToolName(part: MessagePart): string {
+  const text = String(part.toolError || part.toolResult || part.detail || part.content || '')
+  return unavailableToolNameFromText(text)
+}
+
+function isUnavailableToolNotice(part: MessagePart): boolean {
+  const text = String(part.toolError || part.toolResult || part.detail || part.content || '')
+  return /当前环境没有这个工具|工具\s+.+?\s+不可用|工具不可用|tool .*not available/i.test(text)
+}
+
+function unavailableToolNameFromText(text: string): string {
+  const rawMatch = text.match(/^\s*\[?Tool ['"]([^'"]+)['"] is not available/i)
+  if (rawMatch?.[1]) return rawMatch[1]
+  const zhMatch = text.match(/工具\s+([^\s，。:：]+)\s+不可用/)
+  return zhMatch?.[1] || ''
+}
+
+function sanitizeUnavailableToolText(text: string): string {
+  const name = unavailableToolNameFromText(text)
+  if (!name) return text
+  return unavailableToolMessage(name)
+}
+
+function unavailableToolMessage(name: string): string {
+  return `工具 ${name} 不可用：请求了当前环境没有注册的工具。`
+}
+
+function isWriteTool(part: MessagePart): boolean {
+  const name = (part.toolName || part.label || '').toLowerCase()
+  return /write|edit|patch|create|apply|delete/.test(name)
+}
+
+function formatWritePreviewAsDiff(part: MessagePart, text: string): string {
+  if (!isWriteTool(part)) return text
+  if (/^(diff --git|--- (?:a\/|\/dev\/null)|\+\+\+ (?:b\/|\/dev\/null)|@@ )/m.test(text)) return text
+
+  const match = text.match(/^(?:Created|Updated|Wrote)\s+(.+?):[\s\S]*?--- preview ---\s*([\s\S]*?)\s*--- end preview ---/i)
+  const simpleCreated = text.match(/^\+\s*Created:\s*(.+?)\s*\([^)]*\)\s*\n+([\s\S]*)$/i)
+  if (!match && !simpleCreated) return text
+
+  const args = part.toolArgs || {}
+  const path = String(args.path || args.file || args.file_path || match?.[1] || simpleCreated?.[1] || 'file')
+  const preview = match?.[2] || simpleCreated?.[2] || ''
+  const added = preview
+    .split(/\r?\n/)
+    .map(line => line.replace(/^\s*\d+\s*\|\s?/, ''))
+    .filter(line => line.length > 0)
+
+  return [
+    `+++ b/${path}`,
+    `@@ -0,0 +1,${Math.max(added.length, 1)} @@`,
+    ...added.map(line => `+${line}`),
+  ].join('\n')
+}
+
+function agentDisplayName(name: string): string {
+  const cleanName = name.trim().replace(/^(agent[:：]\s*)+/i, '')
+  const normalized = cleanName.toLowerCase()
+  if (!normalized) return ''
+  if (normalized === 'default' || normalized === 'general-purpose' || normalized === 'general_purpose') return '通用子任务'
+  if (normalized === 'explorer') return '探索子任务'
+  if (normalized === 'worker') return '执行子任务'
+  if (normalized === 'reviewer') return '复核子任务'
+  if (normalized === 'sub' || normalized === 'sub_agent' || normalized === 'subagent') return '子任务'
+  if (normalized === 'architecture' || normalized === 'architecture_agent') return '架构设计'
+  if (normalized === 'delegate_to_member') return '外部协作'
+  return `Agent：${compactDetail(cleanName, 40)}`
+}
+
+function agentRoleLabel(role: string): string {
+  const normalized = role.trim().toLowerCase().replace(/[-\s]+/g, '_')
+  const labels: Record<string, string> = {
+    general: '通用处理',
+    research: '调研',
+    ui_brief: '界面梳理',
+    dependency: '依赖分析',
+    review: '复核',
+    test: '测试诊断',
+    diagnosis: '问题诊断',
+    implementation: '小范围实现',
+  }
+  return labels[normalized] || ''
+}
+
+function agentToolLabel(name: string): string {
+  return compactDetail(name.trim(), 40)
+}
+
+function agentTitle(part: MessagePart): string {
+  const args = part.toolArgs || {}
+  const meta = part.metadata || {}
+  const name = meta.agent || meta.agent_name || args.agent || args.agent_name || args.name || part.label
+  const display = agentDisplayName(String(name || ''))
+  const role = agentRoleLabel(String(args.role || meta.role || ''))
+  if (display === '子任务') return role ? `子任务：${role}` : '子任务'
+  if (display) return display
+  return part.label || 'Agent'
+}
+
+function agentStatusLabel(part: MessagePart): string {
+  if (part.status === 'running') return '运行中'
+  if (part.status === 'error') return '失败'
+  if (part.status === 'pending') return '等待'
+  return '完成'
+}
+
+function agentDeliveryMeta(part: MessagePart): string[] {
+  const meta = part.metadata || {}
+  const diagnostics = metadataRecord(meta.diagnostics)
+  const delivery = metadataRecord(diagnostics.workspace_delivery || meta.workspace_delivery || meta.workspaceDelivery)
+  const items: string[] = []
+  if (delivery.ok === false) items.push('失败')
+  else if (delivery.ok === true || delivery.needs_acceptance === true || delivery.merged === true) items.push('完成')
+  const branch = String(delivery.branch || meta.branch || '').trim()
+  if (branch) items.push(`分支 ${compactDetail(branch, 36)}`)
+  const paths = Array.isArray(delivery.paths) ? delivery.paths : []
+  if (paths.length > 0) items.push(`${paths.length} 个文件`)
+  return items
+}
+
+function metadataRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  return value as Record<string, unknown>
+}
+
+function agentAssignmentText(part: MessagePart): string {
+  const args = part.toolArgs || {}
+  const meta = part.metadata || {}
+  const task = args.task || args.task_description || args.description || meta.task
+  const text = task ? String(task).trim() : ''
+  if (/^你是一个.+?(Explorer|Worker|Reviewer|子代理|SubAgent)/i.test(text)) return ''
+  return text
+}
+
+function agentTimelineItems(part: MessagePart): AgentTimelineItem[] {
+  const meta = part.metadata || {}
+  const items: AgentTimelineItem[] = []
+  const winner = meta.winner_name || meta.architecture_agent_winner
+  const valid = meta.valid_design
+  for (const [index, block] of agentReasoningItems(part).entries()) {
+    items.push({
+      id: `reasoning-${index}`,
+      title: '思考',
+      detail: block,
+      status: 'completed',
+      kind: 'reasoning',
+    })
+  }
+  for (const [index, step] of agentSubsteps(part).entries()) {
+    items.push({
+      id: `step-${index}`,
+      title: step.label || '执行步骤',
+      detail: step.value,
+      status: step.status,
+      kind: 'step',
+    })
+  }
+  for (const [index, tool] of agentToolCallItems(part).entries()) {
+    items.push({
+      id: `tool-${index}`,
+      title: tool.title,
+      detail: tool.detail,
+      status: tool.status,
+      kind: 'tool',
+    })
+  }
+  if (winner) {
+    items.push({
+      id: 'winner',
+      title: valid === false ? '候选结论' : '结论',
+      detail: compactDetail(String(winner), 120),
+      status: valid === false ? 'pending' : 'completed',
+      kind: 'conclusion',
+    })
+  }
+  return items
+}
+
+function agentTimelineParts(part: MessagePart): MessagePart[] {
+  const meta = part.metadata || {}
+  const rawParts = meta.subLineParts || meta.sub_line_parts
+  if (Array.isArray(rawParts)) {
+    return rawParts
+      .map((item, index) => normalizeSubLineChildPart(part, item, index))
+      .filter((item): item is MessagePart => Boolean(item))
+  }
+  return agentTimelineItems(part).map((item) => agentTimelineItemToPart(part, item))
+}
+
+function normalizeSubLineChildPart(parent: MessagePart, raw: unknown, index: number): MessagePart | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const record = raw as Record<string, unknown>
+  const partType = String(record.partType || record.part_type || 'tool_call') as MessagePart['partType']
+  return {
+    id: String(record.id || `${parent.id}-subline-${index}`),
+    partType,
+    status: normalizeProcessStatus(String(record.status || 'completed')),
+    label: record.label === undefined ? undefined : String(record.label),
+    detail: record.detail === undefined ? undefined : String(record.detail),
+    content: record.content === undefined ? '' : String(record.content),
+    toolName: record.toolName === undefined && record.tool_name === undefined ? undefined : String(record.toolName || record.tool_name),
+    toolArgs: normalizeRecord(record.toolArgs || record.tool_args),
+    toolResult: record.toolResult === undefined && record.tool_result === undefined ? undefined : String(record.toolResult || record.tool_result),
+    toolError: record.toolError === undefined && record.tool_error === undefined ? undefined : String(record.toolError || record.tool_error),
+    artifacts: Array.isArray(record.artifacts) ? record.artifacts as MessagePart['artifacts'] : undefined,
+    metadata: {
+      ...(normalizeRecord(record.metadata) || {}),
+      parentAgentPartId: parent.id,
+    },
+    startedAt: record.startedAt === undefined && record.started_at === undefined ? undefined : String(record.startedAt || record.started_at),
+    completedAt: record.completedAt === undefined && record.completed_at === undefined ? undefined : String(record.completedAt || record.completed_at),
+  }
+}
+
+function normalizeRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  return value as Record<string, unknown>
+}
+
+function agentTimelineItemToPart(parent: MessagePart, item: AgentTimelineItem): MessagePart {
+  const toolName = item.toolName || agentTimelineToolName(item)
+  const toolArgs = item.toolArgs || agentToolArgsFromDetail(item.detail)
+  return {
+    id: `${parent.id}-agent-${item.id}`,
+    partType: item.kind === 'reasoning' ? 'reasoning' : 'tool_result',
+    status: normalizeProcessStatus(item.status),
+    label: item.title,
+    detail: item.detail,
+    content: item.detail,
+    toolName,
+    toolArgs,
+    toolResult: item.toolResult ?? item.detail,
+    toolError: item.toolError ?? (item.status === 'error' || item.status === 'failed' ? item.detail : undefined),
+    artifacts: item.artifacts,
+    metadata: {
+      ...(parent.metadata || {}),
+      ...(item.metadata || {}),
+      agentTimelineKind: item.kind,
+      parentAgentPartId: parent.id,
+    },
+  }
+}
+
+function agentToolArgsFromDetail(detail: string): Record<string, unknown> | undefined {
+  const text = String(detail || '')
+  const path = text.match(/(?:^|\s)([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+)(?:\s|$|:|·)/)?.[1]
+  return path ? { path } : undefined
+}
+
+function agentTimelineToolName(item: AgentTimelineItem): string {
+  const title = item.title.toLowerCase()
+  const detail = item.detail.toLowerCase()
+  if (item.kind === 'reasoning') return 'thinking'
+  if (item.kind === 'conclusion') return 'summary'
+  if (/写|改|创建|write|edit|patch|create/.test(title + detail)) return 'write_file'
+  if (/列|找|读|搜索|list|read|grep|search|glob/.test(title + detail)) return 'read_file'
+  if (/命令|执行|run|exec|command|shell|powershell/.test(title + detail)) return 'run_command'
+  if (/测试|验证|检查|test|verify|check/.test(title + detail)) return 'run_test'
+  if (/git|commit|branch|merge/.test(title + detail)) return 'git'
+  return 'tool'
+}
+
+function normalizeProcessStatus(status: string): MessagePart['status'] {
+  if (status === 'failed') return 'error'
+  if (status === 'done') return 'completed'
+  if (status === 'waiting') return 'pending'
+  if (status === 'running' || status === 'pending' || status === 'completed' || status === 'error') return status
+  return 'completed'
+}
+
+function agentReasoningItems(part: MessagePart): string[] {
+  const meta = part.metadata || {}
+  const raw = meta.reasoning_blocks || meta.reasoningBlocks
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map(item => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return String(item || '').trim()
+      return String((item as Record<string, unknown>).content || '').trim()
+    })
+    .filter(Boolean)
+    .slice(0, 8)
+}
+
+function agentToolCallItems(part: MessagePart): AgentTimelineItem[] {
+  const meta = part.metadata || {}
+  return normalizeAgentToolCalls(meta.tool_calls)
+}
+
+function normalizeAgentToolCalls(raw: unknown): AgentTimelineItem[] {
+  const toolCalls = Array.isArray(raw) ? raw : []
+  return toolCalls
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
+    .map((record, index) => {
+      const name = String(record.name || record.tool_name || record.toolName || '')
+      const status = String(record.status || 'completed')
+      const args = normalizeAgentToolArgs(record)
+      const output = String(record.output || record.result || record.content || record.summary || '').trim()
+      const contentPreview = String(record.content_preview || record.contentPreview || '').trim()
+      const error = String(record.error || record.tool_error || record.toolError || '').trim()
+      return {
+        id: `tool-${index}`,
+        title: agentToolLabel(name) || name || '工具',
+        detail: agentToolDetail(args, error || contentPreview || output),
+        status: status === 'rejected' ? 'error' : status,
+        kind: 'tool',
+        toolName: name,
+        toolArgs: args,
+        toolResult: contentPreview || output,
+        toolError: error || (status === 'rejected' || status === 'error' || status === 'failed' ? contentPreview || output : undefined),
+        artifacts: normalizeAgentArtifacts(record.artifacts),
+        metadata: normalizeAgentMetadata(record.metadata),
+      } satisfies AgentTimelineItem
+    })
+    .slice(0, 8)
+}
+
+function normalizeAgentArtifacts(raw: unknown): MessagePart['artifacts'] {
+  if (!Array.isArray(raw)) return undefined
+  return raw
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
+    .map(item => ({
+      kind: String(item.kind || ''),
+      uri: item.uri === undefined ? undefined : String(item.uri),
+      content: item.content,
+      metadata: normalizeAgentMetadata(item.metadata),
+    }))
+    .filter(item => item.kind)
+}
+
+function normalizeAgentMetadata(raw: unknown): Record<string, unknown> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  return raw as Record<string, unknown>
+}
+
+function normalizeAgentToolArgs(record: Record<string, unknown>): Record<string, unknown> {
+  const raw = record.arguments || record.args || record.tool_args || record.toolArgs
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>
+  return {}
+}
+
+function agentToolDetail(args: Record<string, unknown>, output: string): string {
+  const subject = String(args.path || args.file || args.command || args.query || args.url || '').trim()
+  if (subject && output) return `${subject} · ${compactDetail(output, 140)}`
+  if (subject) return subject
+  if (output) return compactDetail(output, 160)
+  const entries = Object.entries(args)
+    .filter(([, value]) => value !== undefined && value !== null && String(value).trim())
+    .slice(0, 3)
+    .map(([key, value]) => `${key}: ${String(value)}`)
+  return entries.join(' · ')
+}
+
+function agentSubsteps(part: MessagePart): AgentSubstep[] {
+  const meta = part.metadata || {}
+  const raw = meta.substeps
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
+    .map(item => ({
+      label: String(item.label || item.title || '步骤'),
+      value: String(item.value || item.summary || item.detail || ''),
+      status: String(item.status || 'completed'),
+    }))
+    .filter(step => step.label || step.value)
+    .slice(0, 6)
+}
+
+function agentConclusion(part: MessagePart): string {
+  const meta = part.metadata || {}
+  const finalAnswer = String(meta.final_answer || '').trim()
+  if (finalAnswer) return finalAnswer
+  const text = String(part.detail || part.content || part.toolResult || '').trim()
+  if (!text) return ''
+  return text
+}
+
+function controlTitle(part: MessagePart): string {
+  const name = (part.toolName || part.label || '').toLowerCase()
+  const args = part.toolArgs || {}
+  if (name.includes('write_checklist')) {
+    const steps = Array.isArray(args.steps) ? args.steps.length : 0
+    return steps > 0 ? `计划：${steps} 步` : '计划'
+  }
+  if (name.includes('update_checklist')) return part.status === 'error' ? '计划更新失败' : '更新计划'
+  if (name.includes('verify_design')) return part.status === 'error' ? '验证未通过' : '验证'
+  if (name.includes('decision_point') || name.includes('ask_clarification')) return decisionTitle(part)
+  if (name.includes('self_critique')) return '自检'
+  return part.label || '过程'
+}
+
+function isChecklistPart(part: MessagePart): boolean {
+  const name = (part.toolName || part.label || '').toLowerCase()
+  if (!name.includes('write_checklist') && !name.includes('update_checklist')) return false
+  return checklistItems(part).length > 0
+}
+
+function checklistItems(part: MessagePart): ChecklistItem[] {
+  const args = part.toolArgs || {}
+  const meta = part.metadata || {}
+  const taskPlan = meta.task_plan && typeof meta.task_plan === 'object' && !Array.isArray(meta.task_plan)
+    ? meta.task_plan as Record<string, unknown>
+    : {}
+  const rawSteps = args.steps || meta.plan_steps || taskPlan.steps
+  if (Array.isArray(rawSteps)) {
+    const items = rawSteps
+      .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
+      .map((item, index) => {
+        const status = String(item.status || (index === 0 ? 'running' : 'pending'))
+        const id = String(item.id || `s${index + 1}`)
+        const deliverables = Array.isArray(item.deliverables)
+          ? item.deliverables.map(value => String(value)).filter(Boolean)
+          : []
+        const suffix = deliverables.length ? ` -> ${deliverables.join(', ')}` : ''
+        return {
+          id,
+          text: `${id}. ${String(item.description || `Step ${index + 1}`)}${suffix}`,
+          status,
+          checked: status === 'completed',
+        }
+      })
+    if (items.length > 0) return items
+  }
+  return parseMarkdownChecklist(part.content || part.detail || part.toolResult || '')
+}
+
+function parseMarkdownChecklist(text: string): ChecklistItem[] {
+  return String(text || '')
+    .split(/\r?\n/)
+    .map((line, index) => {
+      const match = line.match(/^\s*(?:\d+\.\s*)?-\s+\[([ xX])\]\s+(.+?)\s*$/)
+      if (!match) return null
+      const checked = match[1].toLowerCase() === 'x'
+      return {
+        id: `line-${index}`,
+        text: match[2],
+        status: checked ? 'completed' : 'pending',
+        checked,
+      }
+    })
+    .filter((item): item is ChecklistItem => Boolean(item))
+}
+
+function isLowValueControlResult(part: MessagePart, result: string): boolean {
+  const name = (part.toolName || part.label || '').toLowerCase()
+  if (!name.includes('verify_design') || part.status === 'error') return false
+  return /验证通过|verification passed|design verified|ok/i.test(result)
+}
+
+function decisionTitle(part: MessagePart): string {
+  const args = part.toolArgs || {}
+  const meta = part.metadata || {}
+  const title = args.title || args.question || meta.title || meta.question || part.label
+  return title ? `需要确认：${compactDetail(String(title), 56)}` : '等待确认'
+}
+
+function decisionStatusLabel(part: MessagePart): string {
+  if (part.status === 'pending') return '等待选择'
+  if (part.status === 'running') return '处理中'
+  if (part.status === 'error') return '失败'
+  return '已记录'
+}
+
+function decisionResponseText(part: MessagePart): string {
+  const response = decisionResponse(part)
+  if (!response) return ''
+  const action = String(response.action || '').toLowerCase()
+  const rawText = String(response.response || '').trim()
+  const labels: Record<string, string> = {
+    approve: '批准',
+    deny: '拒绝',
+    guide: '其他',
+  }
+  const label = labels[action] || compactDetail(action || rawText || '已处理', 32)
+  if (action === 'guide' && rawText && rawText !== action) {
+    return `已选择：${label} - ${compactDetail(rawText, 160)}`
+  }
+  return `已选择：${label}`
+}
+
+function decisionResponse(part: MessagePart): Record<string, unknown> | null {
+  const meta = part.metadata || {}
+  const response = meta.waitingResponse
+  if (response && typeof response === 'object' && !Array.isArray(response)) {
+    return response as Record<string, unknown>
+  }
+  const waitingRequest = meta.waitingRequest
+  if (waitingRequest && typeof waitingRequest === 'object' && !Array.isArray(waitingRequest)) {
+    const nested = (waitingRequest as Record<string, unknown>).response
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+      return nested as Record<string, unknown>
+    }
+  }
+  return null
+}
+
+function decisionDetail(part: MessagePart): string {
+  const args = part.toolArgs || {}
+  const meta = part.metadata || {}
+  const detail = args.reason || args.description || meta.reason || meta.description || part.detail || part.content
+  const title = args.title || args.question || meta.title || meta.question || part.label
+  if (!detail || detail === title) return ''
+  return compactDetail(String(detail), 240)
+}
+
+function decisionOptions(part: MessagePart): DecisionOption[] {
+  const args = part.toolArgs || {}
+  const meta = part.metadata || {}
+  const raw = args.options || meta.options
+  if (!Array.isArray(raw)) {
+    return part.status === 'pending'
+      ? [{ id: 'confirm', label: '确认并继续', description: '按当前方案继续执行' }]
+      : []
+  }
+  return raw
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
+    .map((item, index) => ({
+      id: String(item.id || item.value || `option-${index + 1}`),
+      label: String(item.label || item.title || item.id || `选项 ${index + 1}`),
+      description: String(item.description || item.detail || ''),
+      response: item.response ? String(item.response) : undefined,
+    }))
+    .filter(option => option.label)
+}
+
+function decisionOptionResponse(part: MessagePart, option: DecisionOption): string {
+  if (option.response) return option.response
+  const title = decisionTitle(part).replace(/^需要确认：/, '')
+  const lines = [`我选择：${option.label}`]
+  if (option.description) lines.push(`原因/说明：${option.description}`)
+  if (title && title !== '等待确认') lines.push(`对应决策：${title}`)
+  return lines.join('\n')
+}
+
+function canGuideDecision(part: MessagePart): boolean {
+  return part.partType === 'decision' && part.status === 'pending'
+}
+
+function decisionGuideDraft(part: MessagePart): string {
+  return decisionGuideDrafts.value[part.id] || ''
+}
+
+function updateDecisionGuideDraft(part: MessagePart, event: Event): void {
+  const target = event.target as HTMLTextAreaElement | null
+  decisionGuideDrafts.value = {
+    ...decisionGuideDrafts.value,
+    [part.id]: target?.value || '',
+  }
+}
+
+function submitDecisionGuide(part: MessagePart): void {
+  const response = decisionGuideDraft(part).trim()
+  if (!response) return
+  emit('decision-select', {
+    partId: part.id,
+    option: {
+      id: 'guide',
+      label: '其他',
+      response: 'guide',
+    },
+    response,
+  })
+  decisionGuideDrafts.value = {
+    ...decisionGuideDrafts.value,
+    [part.id]: '',
+  }
+}
+
+function processTarget(part: MessagePart): string {
+  const args = part.toolArgs || {}
+  const raw = args.path || args.file || args.file_path || args.cwd || args.query || args.pattern || args.url
+  if (raw) return compactPath(String(raw))
+  const command = args.command || args.cmd
+  if (command) {
+    const extra = Array.isArray(args.args) ? args.args.join(' ') : ''
+    return compactDetail(extra ? `${command} ${extra}` : String(command), 96)
+  }
+  const label = String(part.label || '')
+  if (/[\\/]/.test(label)) return compactPath(label)
+  return ''
+}
+
+function compactPath(path: string): string {
+  const normalized = path.replace(/\\/g, '/')
+  const parts = normalized.split('/').filter(Boolean)
+  if (parts.length <= 3) return normalized
+  return `.../${parts.slice(-3).join('/')}`
+}
+
+function compactDetail(value: string, limit = 140): string {
+  const oneLine = value.replace(/\s+/g, ' ').trim()
+  return oneLine.length > limit ? `${oneLine.slice(0, limit)}...` : oneLine
+}
+
+/** Extract text parts from parts array (fallback when msg.content is empty) */
+function textGroups(parts: MessagePart[]): TextGroup[] {
+  const groups: TextGroup[] = []
+  let pending = ''
+  for (const p of parts) {
+    if (p.partType === 'text' || (!p.partType && p.content)) {
+      pending += (pending ? '\n' : '') + p.content
+    } else {
+      const content = pending.trim()
+      if (content) groups.push({ content })
+      pending = ''
+    }
+  }
+  const content = pending.trim()
+  if (content) groups.push({ content })
+  return groups
+}
+
+const CONTEXT_TOOLS = new Set(['read_file', 'list_dir', 'glob', 'grep', 'search_content', 'search_files', 'read', 'list'])
+
+function groupParts(parts: MessagePart[]): PartGroup[] {
+  const groups: PartGroup[] = []
+  let contextBatch: MessagePart[] = []
+
+  function flushContext() {
+    if (contextBatch.length === 0) return
+    const allDone = contextBatch.every(p => p.status === 'completed' || p.status === 'error')
+    const counts = countContextTools(contextBatch)
+    groups.push({
+      kind: 'context-group',
+      status: allDone ? 'completed' : 'running',
+      label: 'Context',
+      detail: formatContextSummary(counts),
+      items: [...contextBatch],
+    })
+    contextBatch = []
+  }
+
+  for (const part of parts) {
+    const name = part.toolName || ''
+    if (CONTEXT_TOOLS.has(name)) {
+      contextBatch.push(part)
+    } else if (part.partType === 'text' || !part.partType) {
+      // Text parts are rendered from msg.content — skip here
+    } else {
+      flushContext()
+      groups.push({ kind: 'process', part })
+    }
+  }
+  flushContext()
+  return groups
+}
+
+// ── Process summary ──
+
+interface ProcessCounts {
+  count: number
+  text: string
+  toolCalls: number
+  reasoning: number
+  context: number
+  compaction: number
+  other: number
+}
+
+function processSummary(msg: CoreMessage): ProcessCounts {
+  const parts = msg.parts || []
+  let toolCalls = 0
+  let reasoning = 0
+  let context = 0
+  let compaction = 0
+  let other = 0
+
+  for (const p of parts) {
+    const name = p.toolName || ''
+    if (CONTEXT_TOOLS.has(name)) {
+      context++
+    } else if (p.partType === 'compaction') {
+      compaction++
+    } else if (isControlTool(p) || p.partType === 'model_text' || p.partType === 'plan' || p.partType === 'todo_update' || p.partType === 'decision') {
+      other++
+    } else if (p.partType === 'tool_call' || p.partType === 'tool_result') {
+      toolCalls++
+    } else if (p.partType === 'reasoning') {
+      reasoning++
+    } else if (p.partType === 'text' || !p.partType) {
+      // text parts rendered from msg.content — skip
+    } else {
+      other++
+    }
+  }
+
+  const count = toolCalls + reasoning + context + compaction + other
+  const segments = processMetricSegments(msg)
+  const text = segments.join(' · ')
+
+  return {
+    count,
+    text,
+    toolCalls,
+    reasoning,
+    context,
+    compaction,
+    other,
+  }
+}
+
+function processMetricSegments(msg: CoreMessage): string[] {
+  const meta = (msg.metadata || {}) as Record<string, unknown>
+  const metrics = ((meta.processMetrics || meta.runtime_metrics || {}) as Record<string, unknown>) || {}
+  const durationMs = numberMetric(metrics.duration_ms ?? metrics.durationMs)
+  const inputTokens = numberMetric(metrics.input_tokens ?? metrics.inputTokens ?? metrics.prompt_tokens ?? metrics.promptTokens)
+  const outputTokens = numberMetric(metrics.output_tokens ?? metrics.outputTokens ?? metrics.completion_tokens ?? metrics.completionTokens)
+  const totalTokens = numberMetric(metrics.total_tokens ?? metrics.totalTokens) >= 0
+    ? numberMetric(metrics.total_tokens ?? metrics.totalTokens)
+    : inputTokens >= 0 || outputTokens >= 0
+      ? Math.max(inputTokens, 0) + Math.max(outputTokens, 0)
+      : -1
+  const llmCalls = numberMetric(metrics.llm_calls ?? metrics.llmCalls ?? metrics.model_calls ?? metrics.modelCalls)
+  const cacheHitRate = cacheHitRateMetric(metrics, inputTokens)
+  const segments: string[] = []
+  if (llmCalls >= 0) segments.push(`模型调用 ${formatCount(llmCalls)} 次`)
+  if (durationMs >= 0) segments.push(`耗时 ${formatSeconds(durationMs)} s`)
+  if (totalTokens >= 0) segments.push(`Token ${formatCount(totalTokens)}`)
+  if (cacheHitRate >= 0) segments.push(`命中率 ${formatPercent(cacheHitRate)}`)
+  return segments.length > 0 ? segments : processFallbackSegments(msg)
+}
+
+function cacheHitRateMetric(metrics: Record<string, unknown>, inputTokens: number): number {
+  const direct = numberMetric(metrics.cache_hit_rate ?? metrics.cacheHitRate)
+  if (direct >= 0) return direct
+  const cachedTokens = numberMetric(metrics.cached_tokens ?? metrics.cachedTokens)
+  if (cachedTokens >= 0 && inputTokens > 0) return cachedTokens / inputTokens
+  if (inputTokens >= 0) return 0
+  return -1
+}
+
+function numberMetric(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return -1
+}
+
+function formatSeconds(ms: number): string {
+  if (ms < 0) return 'X'
+  if (ms === 0) return '0'
+  return String(Math.max(1, Math.round(ms / 1000)))
+}
+
+function formatCount(value: number): string {
+  return value >= 0 ? String(Math.round(value)) : 'X'
+}
+
+function formatPercent(value: number): string {
+  if (value < 0) return 'X'
+  const normalized = value > 1 ? value : value * 100
+  if (!Number.isFinite(normalized)) return 'X'
+  return `${Math.round(normalized)}%`
+}
+
+function processFallbackSegments(msg: CoreMessage): string[] {
+  const counts = processItemCounts(msg.parts || [])
+  const segments: string[] = []
+  if (counts.toolCalls > 0) segments.push(`${counts.toolCalls} 个工具`)
+  if (counts.reasoning > 0) segments.push(`${counts.reasoning} 段思考`)
+  if (counts.context > 0) segments.push(`${counts.context} 次上下文`)
+  if (counts.compaction > 0) segments.push(`${counts.compaction} 次压缩`)
+  if (counts.failed > 0) segments.push(`${counts.failed} 个失败`)
+  if (segments.length > 0) return segments
+  return [`${counts.total} 个过程`]
+}
+
+function processItemCounts(parts: MessagePart[]): {
+  total: number
+  toolCalls: number
+  reasoning: number
+  context: number
+  compaction: number
+  failed: number
+} {
+  let total = 0
+  let toolCalls = 0
+  let reasoning = 0
+  let context = 0
+  let compaction = 0
+  let failed = 0
+
+  for (const part of parts) {
+    if (part.partType === 'text' || !part.partType) continue
+    total++
+    if (part.status === 'error') failed++
+    const name = part.toolName || ''
+    if (CONTEXT_TOOLS.has(name)) {
+      context++
+    } else if (part.partType === 'compaction') {
+      compaction++
+    } else if (part.partType === 'reasoning') {
+      reasoning++
+    } else if (part.partType === 'tool_call' || part.partType === 'tool_result') {
+      toolCalls++
+    }
+  }
+  return { total, toolCalls, reasoning, context, compaction, failed }
+}
+
+function processBarStatus(msg: CoreMessage): string {
+  if (isLiveMessage(msg)) return 'part-dot--running'
+  const parts = msg.parts || []
+  const hasError = parts.some(p => p.status === 'error')
+  if (hasError) return 'part-dot--error'
+  if (String(msg.content || '').trim()) return 'part-dot--completed'
+  const allDone = parts.every(p => p.status === 'completed' || p.status === 'error' || p.partType === 'text')
+  if (allDone) return 'part-dot--completed'
+  return 'part-dot--running'
+}
+
+// ── Context tools ──
+
+interface ContextCounts {
+  read: number
+  search: number
+  list: number
+}
+
+function countContextTools(parts: MessagePart[]): ContextCounts {
+  const counts: ContextCounts = { read: 0, search: 0, list: 0 }
+  for (const p of parts) {
+    const name = p.toolName || ''
+    if (name === 'read_file' || name === 'read') counts.read++
+    else if (name === 'search_content' || name === 'search_files' || name === 'grep' || name === 'glob') counts.search++
+    else if (name === 'list_dir' || name === 'list') counts.list++
+  }
+  return counts
+}
+
+function formatContextSummary(c: ContextCounts): string {
+  const items: string[] = []
+  if (c.read > 0) items.push(`Read ${c.read} file${c.read > 1 ? 's' : ''}`)
+  if (c.search > 0) items.push(`Searched ${c.search} ${c.search > 1 ? 'patterns' : 'pattern'}`)
+  if (c.list > 0) items.push(`Listed ${c.list} dir${c.list > 1 ? 's' : ''}`)
+  return items.join(' · ') || ''
+}
+
+</script>
+
+<style>
+.chat-thread {
+  width: min(var(--content-width), 100%);
+  margin: 0 auto;
+  display: grid;
+  grid-auto-rows: max-content;
+  align-content: start;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* ── System messages ── */
+.chat-thread .system-row {
+  display: flex;
+  justify-content: center;
+  padding: 8px 16px;
+}
+.system-bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  border-radius: var(--radius-lg);
+  font-size: 13px;
+  max-width: 640px;
+  line-height: 1.45;
+}
+.system-bubble--info {
+  background: color-mix(in srgb, var(--blue) 12%, transparent);
+  color: var(--blue);
+  border: 1px solid color-mix(in srgb, var(--blue) 25%, transparent);
+}
+.system-bubble--done {
+  background: color-mix(in srgb, var(--green) 12%, transparent);
+  color: var(--green);
+  border: 1px solid color-mix(in srgb, var(--green) 25%, transparent);
+}
+.system-bubble--error {
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+  color: var(--red);
+  border: 1px solid color-mix(in srgb, var(--red) 30%, transparent);
+}
+.system-bubble--waiting {
+  background: color-mix(in srgb, var(--orange) 12%, transparent);
+  color: var(--orange);
+  border: 1px solid color-mix(in srgb, var(--orange) 25%, transparent);
+}
+.system-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+/* ── Process step color coding ── */
+.process-step--completed .process-step-marker {
+  background: var(--green);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--green) 50%, transparent);
+}
+.process-step--error .process-step-marker {
+  background: var(--red);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--red) 50%, transparent);
+}
+.process-step--running .process-step-marker {
+  background: var(--blue);
+  animation: process-pulse 1.4s ease-in-out infinite;
+}
+.process-step--pending .process-step-marker {
+  background: var(--muted);
+}
+@keyframes process-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .4; }
+}
+
+/* ── Part dot status colors ── */
+.part-dot--completed { color: var(--green); }
+.part-dot--error { color: var(--red); }
+.part-dot--running { color: var(--blue); }
+
+/* ── Expandable tool cards ── */
+.process-stream--history {
+  align-items: stretch;
+  counter-reset: reasoning-step;
+}
+.process-stream--live,
+.process-stream--inline {
+  counter-reset: reasoning-step;
+}
+.process-stream--history .process-step {
+  max-width: 100%;
+}
+.chat-thread .process-stream--history .process-step--context,
+.chat-thread .process-stream--history .process-step--tool {
+  display: block !important;
+  grid-template-columns: none !important;
+}
+.process-step--tool {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
+  overflow: visible;
+}
+.process-stream--history .process-step--tool + .process-step--tool {
+  margin-top: 8px;
+}
+.tool-card-header {
+  position: relative;
+  z-index: 0;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 28px;
+  display: grid;
+  grid-template-columns: 12px minmax(0, max-content) minmax(0, 1fr) minmax(12px, max-content);
+  grid-template-areas:
+    "marker type title chevron"
+    ". args args args";
+  align-items: center;
+  column-gap: 6px;
+  row-gap: 4px;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: default;
+  padding: 1px 0 7px;
+  font-size: inherit;
+  text-align: left;
+  overflow: hidden;
+}
+.tool-card-header .process-step-marker {
+  grid-area: marker;
+}
+.tool-card-header .tool-type-tag {
+  grid-area: type;
+}
+.tool-card-header .process-step-title {
+  grid-area: title;
+  min-width: 0;
+}
+.tool-card-header .process-step-title:empty {
+  display: none;
+}
+.tool-card-header .tool-expand-chevron {
+  grid-area: chevron;
+  justify-self: end;
+  align-self: center;
+}
+.tool-card-header.has-detail {
+  cursor: pointer;
+}
+.tool-card-header.has-detail:hover .process-step-title {
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 86%, transparent);
+}
+.tool-type-tag {
+  min-width: 0;
+  max-width: min(160px, 36vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.tool-color--read .tool-type-tag,
+.tool-color--read.process-step--tool .process-step-marker {
+  background: color-mix(in srgb, #79bcff 20%, transparent);
+  color: #79bcff;
+}
+.tool-color--write .tool-type-tag,
+.tool-color--write.process-step--tool .process-step-marker {
+  background: color-mix(in srgb, #32d17d 20%, transparent);
+  color: #32d17d;
+}
+.tool-color--exec .tool-type-tag,
+.tool-color--exec.process-step--tool .process-step-marker {
+  background: color-mix(in srgb, #ff9142 20%, transparent);
+  color: #ff9142;
+}
+.tool-color--git .tool-type-tag,
+.tool-color--git.process-step--tool .process-step-marker {
+  background: color-mix(in srgb, #bd8cff 20%, transparent);
+  color: #bd8cff;
+}
+.tool-color--test .tool-type-tag,
+.tool-color--test.process-step--tool .process-step-marker {
+  background: color-mix(in srgb, #ffd700 20%, transparent);
+  color: #ffd700;
+}
+.tool-color--web .tool-type-tag,
+.tool-color--web.process-step--tool .process-step-marker {
+  background: color-mix(in srgb, #5ce6e6 20%, transparent);
+  color: #5ce6e6;
+}
+.tool-color--del .tool-type-tag,
+.tool-color--del.process-step--tool .process-step-marker {
+  background: color-mix(in srgb, #f5555d 20%, transparent);
+  color: #f5555d;
+}
+.tool-color--warn .tool-type-tag,
+.tool-color--warn.process-step--tool .process-step-marker {
+  background: color-mix(in srgb, #d0a45c 18%, transparent);
+  color: #d0a45c;
+}
+.tool-color--default .tool-type-tag,
+.tool-color--default.process-step--tool .process-step-marker {
+  background: color-mix(in srgb, #a7a29b 20%, transparent);
+  color: #a7a29b;
+}
+.process-step--tool .process-step-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--theme-main-text, var(--text));
+}
+.tool-expand-chevron {
+  align-self: start;
+  font-size: 10px;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 56%, transparent);
+  justify-self: end;
+}
+.tool-card-body {
+  position: relative;
+  z-index: 0;
+  clear: both;
+  margin-top: 8px;
+  padding-left: 0;
+  width: 100%;
+  min-width: 0;
+  overflow: visible;
+}
+.tool-color--warn + .tool-card-body,
+.tool-color--warn .tool-card-body {
+  opacity: .82;
+}
+.process-inline-toggle {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.process-inline-toggle .process-step-title {
+  flex: 0 0 auto;
+}
+.process-inline-toggle .process-step-detail {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.process-detail-panel {
+  grid-column: 1 / -1;
+  margin: 6px 0 8px 22px;
+  position: relative;
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg) 34%, transparent);
+}
+.process-detail-panel--error {
+  border-color: color-mix(in srgb, var(--red) 32%, transparent);
+}
+.process-detail-panel pre {
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  padding: 28px 10px 9px;
+  color: var(--theme-main-text, var(--text));
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.process-detail-copy {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  min-height: 20px;
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 12%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 6%, transparent);
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 70%, transparent);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.process-step--error .process-step-detail {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  word-break: break-word;
+}
+.process-step--context {
+  display: block;
+  width: 100%;
+  min-width: 0;
+}
+.context-group-header {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: none;
+  color: inherit;
+  padding: 0;
+  font-size: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.context-group-header .process-step-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.context-group-header:hover .process-step-title {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.context-tool-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding-left: 24px;
+  min-width: 0;
+}
+.context-tool-card {
+  min-width: 0;
+  width: 100%;
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 4%, transparent);
+  padding: 9px 10px;
+  overflow: hidden;
+}
+.context-tool-head {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.context-tool-head .tool-args-preview {
+  flex: 0 0 100%;
+  margin-left: 0;
+}
+.context-tool-output {
+  margin-top: 7px;
+  max-height: 220px;
+  overflow: auto;
+}
+.tool-output {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--theme-main-soft-background, color-mix(in srgb, var(--theme-main-text, #fff) 5%, transparent));
+  border: 1px solid var(--theme-main-border, color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent));
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--theme-main-text, var(--text));
+  max-height: 320px;
+  overflow: auto;
+}
+.tool-output-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  width: 100%;
+  max-width: 100%;
+  margin-bottom: 7px;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 62%, transparent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.tool-output-meta span {
+  min-width: 0;
+  padding: 2px 7px;
+  border: 1px solid var(--theme-main-border, color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent));
+  border-radius: 5px;
+  background: var(--theme-main-subtle-background, color-mix(in srgb, var(--theme-main-text, #fff) 4%, transparent));
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.tool-output-content {
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  white-space: pre;
+  word-break: normal;
+  min-width: max-content;
+  cursor: pointer;
+}
+.tool-output-content--wrap {
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-width: 0;
+}
+.tool-output--error {
+  border-color: color-mix(in srgb, var(--red) 30%, transparent);
+  background: color-mix(in srgb, var(--red) 6%, transparent);
+  color: var(--red);
+}
+.command-output {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1px solid var(--theme-main-border, color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent));
+  border-radius: var(--radius-sm);
+  background: var(--theme-main-soft-background, color-mix(in srgb, var(--theme-main-text, #fff) 5%, transparent));
+  color: var(--theme-main-text, var(--text));
+}
+.command-output-command {
+  min-width: 0;
+  display: block;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  font-weight: 720;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 86%, transparent);
+}
+.command-output-result {
+  min-width: 0;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  font-weight: 400;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 68%, transparent);
+}
+
+.process-step--model-text {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  padding: 2px 0 8px;
+}
+
+.process-text-head {
+  min-width: 0;
+  display: inline-grid;
+  grid-template-columns: max-content minmax(0, max-content);
+  align-items: center;
+  gap: 7px;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 62%, transparent);
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 680;
+}
+
+.process-step--model-text .process-step-marker {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 42%, transparent);
+}
+
+.process-text-content {
+  display: block;
+  min-width: 0;
+  margin-left: 20px;
+  max-width: 76ch;
+  color: var(--theme-main-text, var(--text));
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.decision-card,
+.checklist-card {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  padding: 10px 11px;
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 4%, transparent);
+}
+
+.decision-card-head,
+.checklist-card-head {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.decision-card-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--theme-main-text, var(--text));
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.decision-card-status {
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 9%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 5%, transparent);
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 62%, transparent);
+  padding: 2px 7px;
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.decision-card--pending {
+  border-color: color-mix(in srgb, var(--blue) 32%, transparent);
+  background: color-mix(in srgb, var(--blue) 8%, transparent);
+}
+
+.decision-card--pending .process-step-marker {
+  background: var(--blue);
+}
+
+.decision-card-detail {
+  margin: 0;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 56%, transparent);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.decision-options {
+  display: grid;
+  gap: 6px;
+}
+
+.decision-option {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 7px;
+  background: rgba(255,255,255,.045);
+  color: var(--theme-main-text, var(--text));
+  padding: 8px 9px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.decision-option:hover {
+  border-color: color-mix(in srgb, var(--blue) 42%, transparent);
+  background: color-mix(in srgb, var(--blue) 10%, transparent);
+}
+
+.decision-option-label {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.decision-option-desc {
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 56%, transparent);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.decision-card-decision {
+  margin: 0;
+  border: 1px solid color-mix(in srgb, var(--green) 32%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--green) 10%, transparent);
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 86%, transparent);
+  padding: 7px 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.decision-guide {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 7px;
+  align-items: end;
+}
+
+.decision-guide-label {
+  align-self: center;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 78%, transparent);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
+  white-space: nowrap;
+}
+
+.decision-guide-input {
+  min-width: 0;
+  width: 100%;
+  resize: vertical;
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 5%, transparent);
+  color: var(--theme-main-text, var(--text));
+  padding: 7px 8px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.decision-guide-input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--blue) 46%, transparent);
+  background: color-mix(in srgb, var(--blue) 8%, transparent);
+}
+
+.decision-guide-submit {
+  border: 1px solid color-mix(in srgb, var(--blue) 38%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--blue) 12%, transparent);
+  color: var(--theme-main-text, var(--text));
+  padding: 7px 9px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.decision-guide-submit:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+}
+
+.sub-line-block {
+  position: relative;
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  margin-left: 4px;
+  padding-left: 22px;
+}
+
+.sub-line-block::before {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 4px;
+  bottom: 4px;
+  width: 1px;
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 16%, transparent);
+}
+
+.sub-line-heading {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.sub-line-title {
+  min-width: 0;
+  color: var(--theme-main-text, var(--text));
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.sub-line-status {
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 56%, transparent);
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.sub-line-delivery-meta {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-left: 18px;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 58%, transparent);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.sub-line-delivery-meta span {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 5%, transparent);
+}
+
+.sub-line-body {
+  display: grid;
+  gap: 8px;
+}
+
+.sub-line-nested-process {
+  display: grid;
+  gap: 7px;
+  padding-left: 14px;
+}
+
+.sub-line-block .user-row {
+  padding: 1px 0 4px;
+}
+
+.sub-line-block .user-bubble {
+  max-width: min(76%, 520px);
+  border-radius: 14px;
+  border-bottom-right-radius: 6px;
+  padding: 7px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.sub-line-block .assistant-answer {
+  margin-top: 4px;
+}
+
+.sub-line-block .assistant-answer,
+.sub-line-block .part-text-content {
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.sub-line-block .process-step {
+  font-size: 11px;
+  line-height: 1.42;
+}
+
+.sub-line-block .process-step--tool {
+  border-radius: 0;
+  padding: 0;
+}
+
+.sub-line-block .tool-card-header {
+  grid-template-columns: 10px max-content minmax(0, max-content) auto;
+  column-gap: 5px;
+  row-gap: 3px;
+}
+
+.sub-line-block .tool-type-tag {
+  font-size: 9px;
+  padding: 1px 4px;
+}
+
+.sub-line-block .tool-card-body {
+  margin-top: 6px;
+}
+
+.sub-line-block .tool-output {
+  padding: 7px 9px;
+  font-size: 11px;
+  line-height: 1.45;
+  max-height: 260px;
+}
+
+.sub-line-block .tool-output-meta {
+  font-size: 10px;
+}
+
+.sub-line-block .tool-output-meta span {
+  padding: 1px 5px;
+}
+
+.sub-line-block .tool-args-preview,
+.sub-line-block .diff-header,
+.sub-line-block .diff-file,
+.sub-line-block .diff-line-num {
+  font-size: 10px;
+}
+
+.sub-line-block .tool-args-preview {
+  margin-left: 0;
+}
+
+.sub-line-block .diff-lines {
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.sub-line-block .diff-line {
+  grid-template-columns: 30px minmax(0, 1fr);
+  min-height: 18px;
+}
+
+.sub-line-block .diff-line-num {
+  width: 30px;
+  padding: 0 5px 0 7px;
+}
+
+.sub-line-block .diff-line-content {
+  padding: 0 8px 0 7px;
+}
+
+.sub-line-block .reasoning-toggle {
+  min-height: 24px;
+  gap: 6px;
+}
+
+.sub-line-block .process-step--reasoning .process-step-title {
+  font-size: 11px;
+}
+
+.sub-line-block .reasoning-duration {
+  font-size: 10px;
+}
+
+.sub-line-block .reasoning-body {
+  margin: 2px 0 6px 20px;
+  max-height: none;
+  overflow: visible;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.checklist-card {
+  border-color: color-mix(in srgb, var(--blue) 18%, transparent);
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 3%, transparent);
+}
+
+.checklist-card-head .process-step-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.checklist-items {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: checklist-item;
+}
+
+.checklist-item {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  counter-increment: checklist-item;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 72%, transparent);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.checklist-item::before {
+  content: counter(checklist-item) ".";
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 44%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+
+.checklist-box {
+  grid-column: 2;
+  width: 14px;
+  height: 14px;
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 28%, transparent);
+  border-radius: 3px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--green);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.checklist-text {
+  grid-column: 3;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.checklist-item--completed .checklist-text {
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 48%, transparent);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.test-result-card {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+  margin: 4px 0;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--line) 86%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--panel-2) 78%, transparent);
+}
+.test-result-card--passed {
+  border-color: color-mix(in srgb, var(--green) 28%, var(--line));
+}
+.test-result-card--failed {
+  border-color: color-mix(in srgb, var(--red) 30%, var(--line));
+}
+.test-result-head {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+.test-result-state {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--theme-main-text, var(--text));
+}
+.test-result-card--passed .test-result-state {
+  color: var(--green);
+}
+.test-result-card--failed .test-result-state {
+  color: var(--red);
+}
+.test-result-command {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 56%, transparent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.test-result-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.test-result-meta span {
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--line) 86%, transparent);
+  border-radius: 5px;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 56%, transparent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.test-result-output {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg) 30%, transparent);
+  color: var(--theme-main-text, var(--text));
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Reasoning collapsible panel ── */
+.process-step--reasoning {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 2px 0;
+  counter-increment: reasoning-step;
+}
+.process-step--reasoning + .process-step--reasoning {
+  margin-top: 3px;
+}
+.reasoning-toggle {
+  width: 100%;
+  min-width: 0;
+  min-height: 28px;
+  display: grid;
+  grid-template-columns: max-content minmax(0, max-content) auto;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  padding: 2px 6px 2px 0;
+  cursor: pointer;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 74%, transparent);
+  font: inherit;
+  text-align: left;
+  transition: background .14s ease, color .14s ease;
+}
+.reasoning-toggle:hover {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 4%, transparent);
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 88%, transparent);
+}
+.process-step--reasoning .process-step-marker {
+  display: none;
+}
+.process-step--reasoning .process-step-title {
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 66%, transparent);
+  font-size: 12px;
+  font-weight: 680;
+}
+.reasoning-duration {
+  min-width: 0;
+  max-width: min(240px, 40vw);
+  justify-self: start;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 42%, transparent);
+  font-style: normal;
+}
+.reasoning-body {
+  margin: 3px 0 8px 24px;
+  max-height: none;
+  overflow: visible;
+  padding: 2px 0 6px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 62%, transparent);
+  font-size: 13px;
+  line-height: 1.65;
+  font-style: normal;
+  text-wrap: pretty;
+}
+.reasoning-body .process-step-detail {
+  display: block;
+  overflow: visible;
+  color: inherit;
+  white-space: pre-wrap;
+  word-break: break-word;
+  -webkit-line-clamp: unset;
+}
+
+.process-step.process-step--compaction {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 2px 0;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 62%, transparent);
+}
+.compaction-toggle {
+  display: grid;
+  grid-template-columns: 12px minmax(0, max-content) minmax(0, 1fr) minmax(12px, max-content);
+  align-items: center;
+  column-gap: 6px;
+  width: 100%;
+  min-width: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.compaction-toggle .process-step-title {
+  min-width: 0;
+  white-space: nowrap;
+}
+.compaction-toggle .process-step-detail {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.compaction-toggle .tool-expand-chevron {
+  justify-self: end;
+}
+.compaction-toggle:hover .process-step-title {
+  color: var(--accent, #79bcff);
+}
+.compaction-summary {
+  box-sizing: border-box;
+  width: min(100%, 720px);
+  margin: 6px 0 0 18px;
+  padding: 8px 10px 9px;
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 4%, transparent);
+}
+.compaction-summary-text {
+  margin: 0;
+  max-height: 148px;
+  overflow: hidden;
+  color: var(--theme-main-text, var(--text));
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Tool args preview ── */
+.tool-args-preview {
+  grid-area: args;
+  min-width: 0;
+  font-size: 11px;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 56%, transparent);
+  font-family: var(--font-mono);
+  max-width: min(100%, 760px);
+  overflow-wrap: anywhere;
+  white-space: normal;
+  justify-self: start;
+}
+
+/* ── Diff-style file blocks ── */
+.diff-block {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--theme-main-border, color-mix(in srgb, var(--theme-main-text, #fff) 12%, transparent));
+  background: var(--theme-main-soft-background, color-mix(in srgb, var(--theme-main-text, #fff) 3.5%, transparent));
+  color: var(--theme-main-text, var(--text));
+  max-height: 400px;
+  overflow: auto;
+}
+.diff-block--read {
+  border-color: var(--theme-main-border, color-mix(in srgb, var(--theme-main-text, #fff) 12%, transparent));
+}
+.diff-block--write {
+  border-color: var(--theme-main-border, color-mix(in srgb, var(--theme-main-text, #fff) 12%, transparent));
+}
+.diff-header {
+  min-width: 0;
+  min-height: 29px;
+  box-sizing: border-box;
+  padding: 5px 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--theme-main-border, color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent));
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.wrap-toggle {
+  flex: 0 0 auto;
+  margin-left: auto;
+  border: 1px solid var(--theme-main-border, color-mix(in srgb, var(--theme-main-text, #fff) 14%, transparent));
+  border-radius: 4px;
+  background: var(--theme-main-subtle-background, color-mix(in srgb, var(--theme-main-text, #fff) 5%, transparent));
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 68%, transparent);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.2;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+.wrap-toggle:hover {
+  color: var(--theme-main-text, var(--text));
+  background: var(--theme-main-soft-background, color-mix(in srgb, var(--theme-main-text, #fff) 9%, transparent));
+}
+.diff-block--read .diff-header {
+  background: var(--theme-main-subtle-background, color-mix(in srgb, var(--theme-main-text, #fff) 5.5%, transparent));
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 78%, transparent);
+}
+.diff-block--write .diff-header {
+  background: var(--theme-main-subtle-background, color-mix(in srgb, var(--theme-main-text, #fff) 5.5%, transparent));
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 78%, transparent);
+}
+.diff-file {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.diff-lines {
+  min-width: max-content;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  min-width: 100%;
+}
+.diff-block:not(.diff-block--wrap) .diff-lines {
+  min-width: max-content;
+}
+.diff-block--wrap .diff-lines {
+  min-width: 0;
+}
+.diff-line {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  min-height: 20px;
+}
+.diff-line:nth-child(even) {
+  background: var(--theme-main-subtle-background, color-mix(in srgb, var(--theme-main-text, #fff) 2%, transparent));
+}
+.diff-line-num {
+  width: 34px;
+  padding: 0 6px 0 10px;
+  text-align: right;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 38%, transparent);
+  font-size: 11px;
+  user-select: none;
+  border-right: 1px solid var(--theme-main-border, color-mix(in srgb, var(--theme-main-text, #fff) 9%, transparent));
+  background: var(--theme-main-subtle-background, color-mix(in srgb, var(--theme-main-text, #fff) 3%, transparent));
+}
+.diff-line-content {
+  white-space: pre;
+  word-break: normal;
+  color: var(--theme-main-text, var(--text));
+  padding: 0 10px 0 8px;
+  min-width: 0;
+}
+.diff-block--wrap .diff-line-content {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* Diff line markers — follows Claude Code unified diff style */
+.diff-line--add {
+  background: color-mix(in srgb, var(--green) 7%, var(--theme-main-subtle-background, transparent));
+}
+.diff-line--add .diff-line-content {
+  color: color-mix(in srgb, var(--green) 72%, var(--theme-main-text, #fff) 28%);
+}
+.diff-line--add .diff-line-num {
+  color: color-mix(in srgb, var(--green) 76%, var(--theme-main-text, #fff) 24%);
+  font-weight: 700;
+}
+.diff-line--del {
+  background: color-mix(in srgb, var(--red) 7%, var(--theme-main-subtle-background, transparent));
+}
+.diff-line--del .diff-line-content {
+  color: color-mix(in srgb, var(--red) 74%, var(--theme-main-text, #fff) 26%);
+}
+.diff-line--del .diff-line-num {
+  color: color-mix(in srgb, var(--red) 78%, var(--theme-main-text, #fff) 22%);
+  font-weight: 700;
+}
+.diff-line--meta {
+  background: color-mix(in srgb, var(--blue) 5%, var(--theme-main-subtle-background, transparent));
+}
+.diff-line--meta .diff-line-content {
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 60%, transparent);
+}
+</style>

@@ -1,0 +1,46 @@
+﻿<#
+.SYNOPSIS
+  Run tests for all or specific LamTools components.
+.DESCRIPTION
+  Usage:
+    .\scripts\test.ps1 [core|writer|artist|all]
+#>
+param(
+    [Parameter(Position=0)][string]$Component = "all"
+)
+
+$ErrorActionPreference = "Stop"
+$Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
+$CoreSrc = Join-Path $Root "core\src"
+$env:PYTHONPATH = if ($env:PYTHONPATH) { "$CoreSrc;$env:PYTHONPATH" } else { $CoreSrc }
+
+function Test-Component {
+    param([string]$Comp)
+
+    switch ($Comp) {
+        "core" {
+            Write-Host "[core] py -3.14 -m pytest" -ForegroundColor Cyan
+            & py -3.14 -m pytest "$Root\core"
+            if ($LASTEXITCODE -ne 0) { Write-Host "[core] TESTS FAILED" -ForegroundColor Red; exit 1 }
+        }
+        "writer" {
+            Write-Host "[writer] py -3.14 -m pytest" -ForegroundColor Cyan
+            & py -3.14 -m pytest "$Root\members\writer\backend"
+            if ($LASTEXITCODE -ne 0) { Write-Host "[writer] TESTS FAILED" -ForegroundColor Red; exit 1 }
+        }
+        "artist" {
+            Write-Host "[artist] py -3.14 -m pytest" -ForegroundColor Cyan
+            & py -3.14 -m pytest "$Root\members\artist\backend"
+            if ($LASTEXITCODE -ne 0) { Write-Host "[artist] TESTS FAILED" -ForegroundColor Red; exit 1 }
+        }
+        default { Write-Host "Unknown component: $Comp. Use: core, writer, artist, or all" -ForegroundColor Red; exit 1 }
+    }
+}
+
+if ($Component -eq "all") {
+    @("core","writer","artist") | ForEach-Object { Test-Component $_ }
+} else {
+    Test-Component $Component
+}
+
+Write-Host "`nAll tests passed." -ForegroundColor Green

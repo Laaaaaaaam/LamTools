@@ -1,0 +1,997 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Writer Codex Layout Preview</title>
+  <style>
+    :root {
+      --chrome: #211714;
+      --sidebar-top: #2c1f1b;
+      --sidebar-bottom: #111920;
+      --app: #121313;
+      --panel: #2d2c2b;
+      --panel-2: #222221;
+      --bubble: #2b2b2a;
+      --line: #3b3a38;
+      --line-soft: #282827;
+      --text: #f1efeb;
+      --muted: #aaa7a1;
+      --faint: #74716b;
+      --green: #31c27c;
+      --blue: #78b7ff;
+      --orange: #ff9b42;
+      --radius: 18px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      min-height: 100vh;
+      background: var(--chrome);
+      color: var(--text);
+      overflow: hidden;
+    }
+
+    button,
+    textarea {
+      font: inherit;
+    }
+
+    button {
+      color: inherit;
+      cursor: pointer;
+    }
+
+    code {
+      font-family: "Cascadia Mono", Consolas, "SFMono-Regular", monospace;
+    }
+
+    .window {
+      height: 100vh;
+      display: grid;
+      grid-template-rows: 46px minmax(0, 1fr);
+      background: var(--chrome);
+    }
+
+    .menubar {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 14px;
+      padding: 0 14px 0 4px;
+      color: #d5d0ca;
+      user-select: none;
+    }
+
+    .menu-left,
+    .menu-items,
+    .window-controls {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      min-width: 0;
+    }
+
+    .menu-icon {
+      width: 24px;
+      height: 24px;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      display: grid;
+      place-items: center;
+      font-size: 20px;
+      line-height: 1;
+    }
+
+    .download {
+      width: 28px;
+      height: 28px;
+      border: 0;
+      border-radius: 50%;
+      background: #2596ff;
+      color: #fff;
+      display: grid;
+      place-items: center;
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .menu-items span {
+      color: #bfb8b2;
+      font-size: 18px;
+      line-height: 1;
+      white-space: nowrap;
+    }
+
+    .window-controls {
+      justify-content: flex-end;
+      gap: 28px;
+      color: #f3f1ee;
+      font-size: 24px;
+      line-height: 1;
+    }
+
+    .shell {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 346px minmax(0, 1fr);
+    }
+
+    .sidebar {
+      min-height: 0;
+      border-right: 1px solid rgba(255,255,255,.06);
+      background: linear-gradient(180deg, var(--sidebar-top) 0%, var(--sidebar-bottom) 100%);
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      color: #e9e5df;
+    }
+
+    .nav {
+      padding: 18px 18px 12px;
+      display: grid;
+      gap: 22px;
+    }
+
+    .nav-item,
+    .settings {
+      display: flex;
+      align-items: center;
+      gap: 13px;
+      min-height: 28px;
+      border: 0;
+      background: transparent;
+      color: #e7e2dc;
+      padding: 0;
+      text-align: left;
+      font-size: 22px;
+      line-height: 1.25;
+    }
+
+    .glyph {
+      width: 21px;
+      color: #d7d1cb;
+      text-align: center;
+      font-size: 20px;
+      line-height: 1;
+      opacity: .95;
+    }
+
+    .side-scroll {
+      min-height: 0;
+      overflow: auto;
+      padding: 0 14px 18px;
+    }
+
+    .side-section {
+      margin-top: 18px;
+    }
+
+    .side-title {
+      margin: 0 0 12px;
+      color: #8d8984;
+      font-size: 22px;
+      font-weight: 520;
+      line-height: 1;
+    }
+
+    .thread,
+    .project-row {
+      width: 100%;
+      min-width: 0;
+      border: 0;
+      border-radius: 13px;
+      background: transparent;
+      color: #dcd8d1;
+      padding: 10px 8px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      text-align: left;
+      font-size: 20px;
+      line-height: 1.2;
+    }
+
+    .thread.active {
+      background: rgba(255,255,255,.12);
+    }
+
+    .thread strong,
+    .project-row strong {
+      min-width: 0;
+      font-weight: 560;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .thread span,
+    .project-row span {
+      color: #9d9993;
+      font-size: 17px;
+      white-space: nowrap;
+    }
+
+    .pill {
+      border-radius: 999px;
+      background: rgba(38, 199, 121, .22);
+      color: #4be38d;
+      padding: 4px 12px;
+      font-size: 15px;
+      white-space: nowrap;
+    }
+
+    .dot {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #78b7ff;
+      display: block;
+    }
+
+    .project-row {
+      grid-template-columns: 24px minmax(0, 1fr) auto;
+    }
+
+    .settings {
+      padding: 16px 18px 20px;
+    }
+
+    .workspace {
+      min-width: 0;
+      min-height: 0;
+      margin: 0 6px 6px 0;
+      border: 1px solid #30302f;
+      border-radius: 17px 0 0 17px;
+      background: var(--app);
+      display: grid;
+      grid-template-rows: 70px minmax(0, 1fr);
+      overflow: hidden;
+      position: relative;
+    }
+
+    .topbar {
+      border-bottom: 1px solid var(--line-soft);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 0 18px 0 24px;
+    }
+
+    .title {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 23px;
+      font-weight: 680;
+    }
+
+    .title span {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .pin {
+      color: #a6a29d;
+      font-size: 22px;
+    }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+    }
+
+    .round,
+    .tool-icon {
+      border: 1px solid var(--line);
+      background: #20201f;
+      color: #d8d5d0;
+      display: grid;
+      place-items: center;
+    }
+
+    .round {
+      height: 42px;
+      min-width: 76px;
+      border-radius: 24px;
+      font-size: 18px;
+    }
+
+    .tool-icon {
+      width: 42px;
+      height: 42px;
+      border-radius: 14px;
+      font-size: 20px;
+    }
+
+    .stage {
+      min-height: 0;
+      overflow: auto;
+      padding: 44px 32px 26px;
+    }
+
+    .content {
+      width: min(1090px, calc(100vw - 560px));
+      min-width: 520px;
+      margin-left: 38px;
+      padding-bottom: 160px;
+    }
+
+    .bubble-user {
+      margin: 0 0 78px auto;
+      width: fit-content;
+      max-width: 560px;
+      border-radius: 19px;
+      background: #262626;
+      padding: 14px 18px;
+      color: #f0eee9;
+      font-size: 21px;
+      line-height: 1.45;
+    }
+
+    .elapsed {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 22px;
+      color: #a7a39d;
+      font-size: 21px;
+      line-height: 1;
+    }
+
+    .rule {
+      height: 1px;
+      background: #2d2d2c;
+      margin: 0 0 24px;
+    }
+
+    .answer {
+      max-width: 1120px;
+      color: #f2efea;
+      font-size: 22px;
+      line-height: 1.62;
+    }
+
+    .answer p {
+      margin: 0 0 18px;
+    }
+
+    .link {
+      color: #9fd0ff;
+      font-weight: 700;
+    }
+
+    .code-pill {
+      display: inline-block;
+      border-radius: 6px;
+      background: #30302f;
+      padding: 2px 8px;
+      color: #ece9e4;
+      font-family: "Cascadia Mono", Consolas, monospace;
+      font-size: .88em;
+      white-space: nowrap;
+    }
+
+    .preview-card,
+    .diff-card {
+      width: min(100%, 1090px);
+      border: 1px solid #30302f;
+      border-radius: 13px;
+      background: #20201f;
+      margin: 20px 0 0;
+      padding: 14px 22px;
+      display: grid;
+      grid-template-columns: 55px minmax(0, 1fr) auto;
+      gap: 14px;
+      align-items: center;
+    }
+
+    .card-icon {
+      width: 55px;
+      height: 55px;
+      border-radius: 13px;
+      background: #111;
+      display: grid;
+      place-items: center;
+      color: #bcb8b2;
+      font-size: 25px;
+    }
+
+    .card-main strong {
+      display: block;
+      font-size: 21px;
+      line-height: 1.35;
+    }
+
+    .card-main span {
+      display: block;
+      color: #b5b0aa;
+      font-size: 19px;
+      line-height: 1.35;
+    }
+
+    .open-btn,
+    .review-btn {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #242423;
+      color: #f0eee9;
+      padding: 10px 16px;
+      font-size: 19px;
+      white-space: nowrap;
+    }
+
+    .diff {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-top: 4px;
+      font-size: 18px;
+      font-family: "Cascadia Mono", Consolas, monospace;
+    }
+
+    .add {
+      color: #40d98b;
+    }
+
+    .del {
+      color: #ff6969;
+    }
+
+    .feedback {
+      position: absolute;
+      left: 70px;
+      bottom: 24px;
+      width: min(1090px, calc(100% - 600px));
+      min-width: 520px;
+      border-radius: 26px;
+      background: #2c2c2b;
+      box-shadow: 0 24px 60px rgba(0,0,0,.42);
+      padding: 18px 18px 14px;
+    }
+
+    .feedback textarea {
+      width: 100%;
+      height: 54px;
+      resize: none;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: #f1efeb;
+      font-size: 21px;
+      line-height: 1.45;
+    }
+
+    .feedback textarea::placeholder {
+      color: #77736d;
+    }
+
+    .feedback-row {
+      margin-top: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      color: #a9a49e;
+    }
+
+    .feedback-left,
+    .feedback-right {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      min-width: 0;
+    }
+
+    .plus {
+      border: 0;
+      background: transparent;
+      color: #b7b2ac;
+      font-size: 32px;
+      width: 44px;
+      height: 44px;
+      line-height: 1;
+    }
+
+    .perm {
+      border: 0;
+      background: transparent;
+      color: var(--orange);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 18px;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+
+    .model {
+      border: 0;
+      border-radius: 9px;
+      background: #3a3936;
+      color: #d9d4cf;
+      padding: 8px 12px;
+      font-size: 18px;
+      white-space: nowrap;
+    }
+
+    .send {
+      width: 45px;
+      height: 45px;
+      border: 0;
+      border-radius: 50%;
+      background: #c8c6c1;
+      color: #171717;
+      font-size: 27px;
+      line-height: 1;
+      display: grid;
+      place-items: center;
+    }
+
+    .side-panel {
+      position: absolute;
+      top: 86px;
+      right: 22px;
+      width: 444px;
+      max-height: calc(100vh - 176px);
+      overflow: auto;
+      border: 1px solid #45433f;
+      border-radius: 28px;
+      background: var(--panel);
+      padding: 25px 25px 24px;
+      box-shadow: 0 24px 60px rgba(0,0,0,.32);
+    }
+
+    .panel-section {
+      padding-bottom: 22px;
+      margin-bottom: 22px;
+      border-bottom: 1px solid #44423e;
+    }
+
+    .panel-section:last-child {
+      border-bottom: 0;
+      margin-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .panel-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 14px;
+      color: #aaa49d;
+      font-size: 21px;
+      line-height: 1.2;
+    }
+
+    .gear {
+      color: #aaa49d;
+      font-size: 24px;
+    }
+
+    .progress {
+      display: grid;
+      gap: 16px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 22px minmax(0, 1fr);
+      gap: 12px;
+      align-items: center;
+      color: #c8c3bc;
+      font-size: 21px;
+      line-height: 1.25;
+    }
+
+    .circle {
+      width: 21px;
+      height: 21px;
+      border-radius: 50%;
+      border: 2px solid #aaa49d;
+    }
+
+    .step.done .circle {
+      border-color: var(--green);
+      background: radial-gradient(circle at center, var(--green) 0 45%, transparent 46%);
+    }
+
+    .env-list {
+      display: grid;
+      gap: 14px;
+    }
+
+    .env {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: 24px minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      color: #ece8e3;
+      font-size: 21px;
+      line-height: 1.3;
+    }
+
+    .env span {
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .env small {
+      color: #aaa49d;
+      font-size: 18px;
+      white-space: nowrap;
+    }
+
+    @media (max-width: 1420px) {
+      .shell {
+        grid-template-columns: 300px minmax(0, 1fr);
+      }
+
+      .nav-item,
+      .settings,
+      .side-title {
+        font-size: 18px;
+      }
+
+      .thread,
+      .project-row {
+        font-size: 17px;
+      }
+
+      .thread span,
+      .project-row span {
+        font-size: 14px;
+      }
+
+      .side-panel {
+        width: 330px;
+        right: 16px;
+        padding: 22px 22px 21px;
+      }
+
+      .content {
+        width: calc(100% - 366px);
+        min-width: 0;
+        margin-left: 28px;
+      }
+
+      .feedback {
+        width: calc(100% - 404px);
+        min-width: 0;
+        left: 58px;
+      }
+
+      .feedback-row {
+        flex-wrap: wrap;
+      }
+
+      .feedback-right {
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        margin-left: auto;
+      }
+
+      .answer,
+      .bubble-user,
+      .elapsed,
+      .card-main strong,
+      .panel-title,
+      .step,
+      .env {
+        font-size: 18px;
+      }
+
+      .card-main span,
+      .open-btn,
+      .review-btn,
+      .feedback textarea,
+      .model,
+      .perm {
+        font-size: 16px;
+      }
+
+      .preview-card,
+      .diff-card {
+        padding: 12px 16px;
+        grid-template-columns: 46px minmax(0, 1fr) auto;
+      }
+
+      .card-icon {
+        width: 46px;
+        height: 46px;
+      }
+    }
+
+    @media (max-width: 1120px) {
+      body {
+        overflow: auto;
+      }
+
+      .window {
+        height: auto;
+        min-height: 100vh;
+      }
+
+      .shell {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        display: none;
+      }
+
+      .workspace {
+        margin: 0;
+        border-radius: 0;
+        min-height: calc(100vh - 46px);
+      }
+
+      .side-panel {
+        position: static;
+        width: auto;
+        max-height: none;
+        margin: 0 18px 140px;
+      }
+
+      .stage {
+        padding: 28px 18px 0;
+      }
+
+      .content,
+      .feedback {
+        width: auto;
+        min-width: 0;
+        margin-left: 0;
+      }
+
+      .feedback {
+        left: 18px;
+        right: 18px;
+        bottom: 18px;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .menu-items span:nth-child(n + 3),
+      .window-controls {
+        display: none;
+      }
+
+      .topbar {
+        height: auto;
+        min-height: 68px;
+        padding: 12px 14px;
+      }
+
+      .title {
+        font-size: 18px;
+      }
+
+      .round,
+      .tool-icon {
+        width: 36px;
+        min-width: 36px;
+        height: 36px;
+        font-size: 15px;
+      }
+
+      .stage {
+        padding: 20px 14px 0;
+      }
+
+      .bubble-user,
+      .answer,
+      .elapsed,
+      .card-main strong,
+      .card-main span,
+      .panel-title,
+      .step,
+      .env {
+        font-size: 16px;
+      }
+
+      .preview-card,
+      .diff-card {
+        grid-template-columns: 42px minmax(0, 1fr);
+      }
+
+      .open-btn,
+      .review-btn {
+        grid-column: 2;
+        justify-self: start;
+        font-size: 15px;
+      }
+
+      .feedback textarea {
+        font-size: 16px;
+      }
+
+      .model,
+      .perm {
+        font-size: 14px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="window">
+    <header class="menubar">
+      <div class="menu-left">
+        <button class="menu-icon" title="侧栏">▯</button>
+        <button class="menu-icon" title="后退">‹</button>
+        <button class="menu-icon" title="前进">›</button>
+        <button class="download" title="同步">↓</button>
+      </div>
+      <nav class="menu-items" aria-label="菜单">
+        <span>文件</span>
+        <span>编辑</span>
+        <span>查看</span>
+        <span>窗口</span>
+        <span>帮助</span>
+      </nav>
+      <div class="window-controls" aria-hidden="true">
+        <span>−</span>
+        <span>▢</span>
+        <span>×</span>
+      </div>
+    </header>
+
+    <div class="shell">
+      <aside class="sidebar">
+        <nav class="nav" aria-label="主导航">
+          <button class="nav-item"><span class="glyph">✎</span><span>新对话</span></button>
+          <button class="nav-item"><span class="glyph">⌕</span><span>搜索</span></button>
+          <button class="nav-item"><span class="glyph">⌘</span><span>插件</span></button>
+          <button class="nav-item"><span class="glyph">◷</span><span>自动化</span></button>
+          <button class="nav-item"><span class="glyph">▯</span><span>Writer 移动版</span></button>
+        </nav>
+
+        <div class="side-scroll">
+          <section class="side-section">
+            <h2 class="side-title">置顶</h2>
+            <button class="thread active"><strong>观察本地视频剪辑执行</strong><span>1 分</span></button>
+            <button class="thread"><strong>梳理 Artist 运行逻辑</strong><span class="dot"></span></button>
+            <button class="thread"><strong>梳理 Writer 记忆系统</strong><span class="dot"></span></button>
+            <button class="thread"><strong>了解 Writer Git 操作</strong><span>10 小时</span></button>
+          </section>
+
+          <section class="side-section">
+            <h2 class="side-title">项目</h2>
+            <button class="project-row"><span>□</span><strong>LamMate</strong><span></span></button>
+            <button class="thread"><strong>审阅 Mate 功能表</strong><span>19 小时</span></button>
+            <button class="project-row"><span>□</span><strong>LamSage</strong><span></span></button>
+            <button class="thread"><strong>总结Sage 计划</strong><span class="pill">等待批准</span></button>
+            <button class="project-row"><span>□</span><strong>LamButler</strong><span></span></button>
+            <button class="thread"><strong>梳理 Butler 功能表</strong><span>21 小时</span></button>
+            <button class="project-row"><span>□</span><strong>lamartist</strong><span></span></button>
+            <button class="thread"><strong>对比 gpt image 2</strong><span>12 小时</span></button>
+          </section>
+        </div>
+
+        <button class="settings"><span class="glyph">⚙</span><span>设置</span></button>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div class="title"><span class="pin">◆</span><span>观察本地视频剪辑执行</span><span>···</span></div>
+          <div class="top-actions">
+            <button class="round">Writer ▾</button>
+            <button class="tool-icon" title="任务">☷</button>
+            <button class="tool-icon" title="终端">▭</button>
+            <button class="tool-icon" title="布局">▯</button>
+          </div>
+        </header>
+
+        <section class="stage" aria-label="对话内容">
+          <div class="content">
+            <div class="bubble-user">太丑了，你照着codex的UI做吧，到时候再微调</div>
+
+            <div class="elapsed">已处理 3m 36s <span>›</span></div>
+            <div class="rule"></div>
+
+            <div class="answer">
+              <p>改了，预览现在更接近 Codex 的工作台：左侧任务列表，中间会话流和工具摘要，右侧上下文/验证/Git/决策点，整体更轻、更克制。</p>
+              <p>
+                文件：
+                <span class="link">writer-task-console-preview.html</span><br />
+                预览地址：
+                <span class="code-pill">http://127.0.0.1:6189/writer-task-console-preview.html</span><br />
+                提交：
+                <span class="code-pill">e73caf9 docs: restyle writer console preview</span>
+              </p>
+              <p>我已做浏览器检查：当前视口无横向溢出、无明显文字裁切。工作区里还有几处后端脏文件不是这次 HTML 改动，我没碰。</p>
+            </div>
+
+            <article class="preview-card">
+              <div class="card-icon">◎</div>
+              <div class="card-main">
+                <strong>网页预览</strong>
+                <span>网站</span>
+              </div>
+              <button class="open-btn">打开方式⌄</button>
+            </article>
+
+            <article class="diff-card">
+              <div class="card-icon">⊞</div>
+              <div class="card-main">
+                <strong>已编辑 writer-task-console-preview.html</strong>
+                <div class="diff"><span class="add">+602</span><span class="del">-606</span></div>
+              </div>
+              <button class="review-btn">审核</button>
+            </article>
+          </div>
+
+          <aside class="side-panel">
+            <section class="panel-section">
+              <div class="panel-title"><span>进度</span></div>
+              <div class="progress">
+                <div class="step done"><span class="circle"></span><span>确定普通用户 CLI 命令形态</span></div>
+                <div class="step done"><span class="circle"></span><span>实现 run/resume/watch/result 入口</span></div>
+                <div class="step done"><span class="circle"></span><span>补充帮助文案和测试</span></div>
+                <div class="step"><span class="circle"></span><span>跑回归并真实试用</span></div>
+                <div class="step"><span class="circle"></span><span>提交稳定改造</span></div>
+              </div>
+            </section>
+
+            <section class="panel-section">
+              <div class="panel-title"><span>环境信息</span><span class="gear">⚙</span></div>
+              <div class="env-list">
+                <div class="env"><span>⊞</span><span>变更</span><small></small></div>
+                <div class="env"><span>▱</span><span>本地</span><small>⌄</small></div>
+                <div class="env"><span>⌘</span><span>writer/reliability/completion-verifi...</span><small>⌄</small></div>
+                <div class="env"><span>○</span><span>提交或推送</span><small></small></div>
+                <div class="env"><span>GitHub</span><span>CLI 未通过身份验证</span><small></small></div>
+              </div>
+            </section>
+
+            <section class="panel-section">
+              <div class="panel-title"><span>浏览器</span></div>
+              <div class="env-list">
+                <div class="env"><span>◎</span><span>Writer 控制台预览</span><small>127.0.0.1:6189</small></div>
+              </div>
+            </section>
+
+            <section class="panel-section">
+              <div class="panel-title"><span>来源</span></div>
+              <div class="env-list">
+                <div class="env"><span>◎</span><span>docs/writer-task-console-preview.html</span><small></small></div>
+              </div>
+            </section>
+          </aside>
+
+          <form class="feedback">
+            <textarea placeholder="要求后续变更" aria-label="要求后续变更"></textarea>
+            <div class="feedback-row">
+              <div class="feedback-left">
+                <button class="plus" type="button">＋</button>
+                <button class="perm" type="button">▣ 完全访问权限⌄</button>
+              </div>
+              <div class="feedback-right">
+                <span class="model">OpenAI HTTP only</span>
+                <span class="model">5.5 中⌄</span>
+                <span>♩</span>
+                <button class="send" type="button">↑</button>
+              </div>
+            </div>
+          </form>
+        </section>
+      </main>
+    </div>
+  </div>
+</body>
+</html>

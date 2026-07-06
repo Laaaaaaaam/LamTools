@@ -1,0 +1,604 @@
+## 1. OpenAI 的 Agent 不是一个“大 prompt”，而是一个运行单元
+
+在 OpenAI Agents SDK 里，**Agent 是 SDK-based workflow 的核心单元**。一个 Agent 不是只有 prompt，而是把这些东西打包在一起：
+
+```text
+Agent
+  ├─ name
+  ├─ model
+  ├─ instructions / prompt
+  ├─ tools
+  ├─ guardrails
+  ├─ MCP servers
+  ├─ handoffs
+  └─ structured outputs
+```
+
+OpenAI 文档明确说，Agent 会打包模型、指令，以及工具、guardrails、MCP servers、handoffs、structured outputs 等运行时行为。也就是说，OpenAI 对 Agent 的理解更接近“一个具备职责、能力、约束和输出契约的执行角色”，不是“前端调用一个聊天接口”。([OpenAI 开发者][1])
+
+你可以把它理解成：
+
+```text
+普通聊天：
+user message → model → assistant text
+
+Agent：
+user message
+  → Agent runtime
+  → model decides next action
+  → runtime interprets action
+  → maybe execute tool
+  → maybe switch agent
+  → maybe ask approval
+  → maybe continue model call
+  → final output
+```
+
+---
+
+## 2. OpenAI Agent 的核心是 Agent Loop
+
+OpenAI 文档把这个叫 **agent loop**。一个 SDK run 是一个 application-level turn，runner 会一直循环，直到到达真正的停止点。公开文档里的循环步骤是：
+
+```text
+1. 调用当前 Agent 的模型
+2. 检查模型输出
+3. 如果模型产生工具调用，执行工具并继续
+4. 如果模型 handoff 给另一个 specialist，切换 Agent 并继续
+5. 如果模型产生最终答案，且没有更多工具工作，返回结果
+```
+
+OpenAI 文档还特别强调：tools、handoffs、approvals、streaming 都是建立在这个 loop 上，而不是替代这个 loop。([OpenAI 开发者][2])
+
+这就是关键差别。
+
+你之前理解的“后端把信息写入事件并发送出来”，只是 **streaming 展示层**。OpenAI 做 Agent 的内部逻辑更像这样：
+
+```ts
+async function runAgent(agent, input, state) {
+  let currentAgent = agent;
+  let runState = prepareState(input, state);
+
+  while (true) {
+    const modelInput = buildModelInput(currentAgent, runState);
+
+    const response = await callModel({
+      model: currentAgent.model,
+      instructions: currentAgent.instructions,
+      tools: currentAgent.tools,
+      input: modelInput,
+    });
+
+    const items = inspectModelOutput(response.output);
+
+    if (items.hasToolCalls()) {
+      const toolOutputs = await executeTools(items.toolCalls);
+      runState.append(items.toolCalls);
+      runState.append(toolOutputs);
+      continue;
+    }
+
+    if (items.hasHandoff()) {
+      currentAgent = resolveNextAgent(items.handoff);
+      runState.append(items.handoff);
+      continue;
+    }
+
+    if (items.hasApprovalRequest()) {
+      return pauseWithInterruptions(runState, items.approvals);
+    }
+
+    if (items.hasFinalAnswer()) {
+      runState.append(items.finalAnswer);
+      return buildFinalResult(runState);
+    }
+  }
+}
+```
+
+这段不是 OpenAI 源码，只是按公开文档还原出的执行模型。重点是：**Agent runtime 是主动控制循环的 orchestrator，模型只是每一轮给出下一步 output item。**
+
+---
+
+## 3. 模型不“执行工具”，它只“请求工具”
+
+在 OpenAI 的 function calling / tool calling 模型里，模型不会真的查数据库、发 HTTP、下订单、改文件。模型只会产生类似这样的意图：
+
+```json
+{
+  "type": "function_call",
+  "name": "lookup_order",
+  "arguments": {
+    "order_id": "123"
+  }
+}
+```
+
+然后是 Agent runtime 或你的应用代码负责执行这个工具，再把工具结果作为新的输入交回模型。OpenAI 的 function calling 文档也说明，工具调用是多步流程：模型产生工具调用，应用侧执行工具，再把工具结果返回给模型，模型继续生成最终回答或更多工具调用。([OpenAI 开发者][3])
+
+所以 OpenAI 做 Agent 的底层思想是：
+
+```text
+LLM = planner / reasoner / next-action generator
+Runtime = executor / state manager / safety gate / event producer
+Tool = deterministic capability
+```
+
+这也是为什么 Agent 比普通 chat 更复杂。普通 chat 只需要处理文本；Agent 需要处理：
+
+```text
+assistant message
+tool call
+tool output
+handoff request
+handoff completed
+approval requested
+reasoning item
+final output
+error
+state snapshot
+trace span
+```
+
+---
+
+## 4. OpenAI 把 Agent Run 看成“状态演化”，不是“字符串生成”
+
+这是你前端显示出问题的根源之一。OpenAI 公开的 Agents SDK 里，一个 run 会产生几种不同层级的信息：
+
+```text
+Run state
+  ├─ conversation history
+  ├─ current agent
+  ├─ model output items
+  ├─ tool call items
+  ├─ tool output items
+  ├─ handoff items
+  ├─ interruptions / approvals
+  ├─ finalOutput
+  └─ trace data
+```
+
+OpenAI 文档里还区分了几种 conversation state 策略：
+
+```text
+result.history        → 你的应用保存 replay-ready history
+session               → SDK + 你的存储保存持久会话
+conversationId        → OpenAI Conversations API 管理共享会话状态
+previousResponseId    → Responses API 的轻量级 response-to-response continuation
+```
+
+文档还提醒，大多数应用一个 conversation 里应该选择一种状态策略，否则本地 replay 和 server-managed state 混用可能导致上下文重复。([OpenAI 开发者][2])
+
+这说明 OpenAI 的 Agent 不是每次都“前端发消息 → 后端转发 → 模型回字符串”。它维护的是一个 **run state**，每一轮模型调用、工具调用、handoff、审批暂停都会改变这个 state。
+
+---
+
+## 5. Streaming 只是 Agent Run 的一个观察窗口
+
+OpenAI Agents SDK 的 streaming 文档说得很直接：开启 streaming 后返回的 stream 实现了 `AsyncIterable`，每个 yielded event 描述 run 里发生了什么；stream 产生三类事件。([OpenAI][4])
+
+这三类事件非常重要：
+
+```text
+1. raw_model_stream_event
+   模型底层流事件，比如 response.output_text.delta
+
+2. run_item_stream_event
+   Agent runtime 级别的 item，比如 message、tool call、tool output、handoff、approval
+
+3. agent_updated_stream_event
+   当前 Agent 发生变化，比如切换到 Refund Agent
+```
+
+OpenAI 文档列出的 `run_item_stream_event` 包括：
+
+```text
+message_output_created
+handoff_requested
+handoff_occurred
+tool_called
+tool_output
+reasoning_item_created
+tool_approval_requested
+```
+
+这些不是简单 token，而是 Agent runtime 理解后的结构化事件。([OpenAI][4])
+
+所以 OpenAI 的真实设计更接近：
+
+```text
+Agent run state
+  ↓
+生成多个观察投影
+  ├─ text stream        给只关心文字的 UI
+  ├─ full event stream  给需要工具、handoff、approval 的 UI
+  ├─ final result       给业务逻辑
+  └─ trace              给调试和评估
+```
+
+也就是说：**事件不是源头，run state 才是源头。事件是 state 变化的投影。**
+
+---
+
+## 6. `toTextStream()` 只是一个文本投影，不代表 Agent 的完整信息流
+
+Agents SDK 提供 `toTextStream()`，但文档明确说它只发 assistant text；工具调用、handoffs、approvals 和其他 runtime events 都在完整事件流里。文档也说 `stream.completed` 会在 run 和所有 pending callbacks 完成后 resolve，包括最后一个 text token 之后的 session persistence 或 history compaction hooks。([OpenAI][4])
+
+这解释了一个很关键的架构点：
+
+```text
+OpenAI Agent 内部完整事件流：
+  raw model delta
+  tool called
+  tool output
+  handoff occurred
+  approval requested
+  reasoning item
+  agent updated
+  message output
+  completed
+
+给普通用户看的文本流：
+  assistant text delta
+```
+
+所以 OpenAI 不是“边生成边把字符串发给前端”这么简单。它有完整 run event stream，然后根据 UI 需要投影成不同展示层。
+
+ChatGPT 里你看到的“正在搜索网页”“正在分析文件”“正在写代码”“已完成”这类状态，背后很可能就是类似这种 **runtime semantic event → UI projection** 的设计，而不是纯文本 token。当然，ChatGPT 产品内部的具体实现没有完全公开；这里说的是公开 Agent 架构能支持的模式。
+
+---
+
+## 7. Handoff：OpenAI 的多 Agent 不是多个聊天框，而是当前 Agent 的切换
+
+OpenAI 的 Agent 定义里有 `handoffs` 和 `handoffDescription`。文档解释，`handoffDescription` 用来提示 routing agents 什么时候选择这个 specialist，`handoffs` 用来 delegate 到另一个 Agent。([OpenAI 开发者][1])
+
+在 runtime 里，handoff 不是“前端重新开一个请求”。更准确地说是：
+
+```text
+当前 Agent 调模型
+  ↓
+模型输出 handoff request
+  ↓
+runtime 记录 handoff_requested
+  ↓
+runtime 选择目标 Agent
+  ↓
+runtime 记录 handoff_occurred
+  ↓
+currentAgent = targetAgent
+  ↓
+继续同一个 run loop
+```
+
+所以一个复杂 Agent 系统可以这样组织：
+
+```text
+Triage Agent
+  ├─ handoff → Refund Agent
+  ├─ handoff → Tech Support Agent
+  ├─ handoff → Sales Agent
+  └─ handoff → Compliance Agent
+```
+
+这里的重点是：**handoff 是运行时状态变化，不是前端路由变化。**
+
+前端显示“已切换到退款专员”只是这个状态变化的 UI 表达。
+
+---
+
+## 8. Approval / Human-in-the-loop：Agent 可以暂停，不是只能成功或失败
+
+OpenAI Agents SDK 的 streaming 文档说明，streaming 与会暂停执行的 handoffs / approvals 兼容；当工具需要人工审批时，`stream.interruptions` 会暴露 pending approvals，可以通过 `state.approve()` 或 `state.reject()` 继续。文档还强调，审批暂停后要从 `state` resume，而不是重新开始一个 fresh user turn。([OpenAI][4])
+
+这说明 OpenAI 的 Agent run 有这些状态：
+
+```text
+running
+paused_for_approval
+resumed
+completed
+cancelled
+failed
+```
+
+这和普通 chat 很不一样。普通 chat 通常只有：
+
+```text
+loading
+done
+error
+```
+
+所以如果你想模仿 OpenAI Agent 的设计，你的前端状态机也应该支持：
+
+```text
+用户输入已提交
+模型正在思考
+模型正在生成工具参数
+工具等待审批
+工具执行中
+工具已返回
+Agent 已切换
+模型继续生成
+最终完成
+```
+
+而不是只有一个 `isLoading`.
+
+---
+
+## 9. Reasoning：OpenAI 不把原始推理 tokens 当作普通输出暴露
+
+OpenAI reasoning 模型会在产生可见回答前使用内部 reasoning tokens。官方文档说 reasoning tokens 可以帮助模型计划、使用工具、检查替代方案、处理歧义和解决多步任务。文档也明确说不暴露 raw reasoning tokens；如果需要，可以选择 reasoning summary，而且 stateless 模式下可以通过 encrypted reasoning items 保留跨轮所需的 reasoning state。([OpenAI 开发者][5])
+
+这对 Agent 很重要。OpenAI 的 Agent 运行不是：
+
+```text
+把所有思考过程都发给前端
+```
+
+而是：
+
+```text
+内部 reasoning
+  → 产生可执行 item
+  → runtime 执行 / 记录 / 审批
+  → 只把合适的 summary、状态、工具进度、最终回答展示给用户
+```
+
+所以前端看到的“思考中”“正在使用工具”“完成搜索”通常是 **可展示的状态摘要**，不是原始 chain-of-thought。
+
+---
+
+## 10. OpenAI 的“前端连接”不是靠你手写所有 UI 状态；ChatKit 是它公开出来的 UI 层
+
+如果你问的是 OpenAI 面向开发者的前端层，公开产品是 **ChatKit**。OpenAI 文档说 ChatKit 用来构建可嵌入的 agentic chat experience，提供可定制的 chat embed、UI widgets、tool invocation support、file attachments 和 chain-of-thought visualizations。它可以走 custom server integration，连接到你自己的 agentic service，包括用 Agents SDK 构建的服务。([OpenAI 开发者][6])
+
+这说明 OpenAI 在公开方案里把系统拆成：
+
+```text
+ChatKit / UI layer
+  ↓
+your server-side agent service
+  ↓
+Agents SDK / Responses API
+  ↓
+model + tools + state
+```
+
+也就是说，OpenAI 并不鼓励前端自己理解所有模型底层事件。它倾向于给 UI 一个更高层的 chat/agent protocol，让 UI 负责展示消息、工具调用、附件、状态，而不是让 UI 去解析所有 Responses API 原始事件。
+
+---
+
+## 11. OpenAI Agent 的信息流可以抽象成四层
+
+最准确的 mental model 是这个：
+
+```text
+┌─────────────────────────────────────┐
+│  UI Projection Layer                 │
+│  ChatKit / ChatGPT UI / custom UI    │
+│  展示文本、工具卡片、审批、文件、状态 │
+└─────────────────────────────────────┘
+                 ↑
+                 │ semantic events / UI state
+                 │
+┌─────────────────────────────────────┐
+│  Agent Runtime Layer                 │
+│  Runner / loop / state machine       │
+│  工具执行、handoff、approval、state   │
+└─────────────────────────────────────┘
+                 ↑
+                 │ model output items
+                 │
+┌─────────────────────────────────────┐
+│  Model Interface Layer               │
+│  Responses API                       │
+│  text delta / tool call / reasoning  │
+└─────────────────────────────────────┘
+                 ↑
+                 │ tokens / reasoning / logits 内部
+                 │
+┌─────────────────────────────────────┐
+│  Model Layer                         │
+│  GPT reasoning + generation          │
+└─────────────────────────────────────┘
+```
+
+普通应用经常犯的错是把第二层和第三层混在一起：
+
+```text
+错误理解：
+OpenAI stream = Agent stream = UI stream
+
+更接近 OpenAI 的理解：
+OpenAI model stream
+  → 被 Agent runtime 消化
+  → 形成 run state / run items
+  → 再投影成 UI stream
+```
+
+---
+
+## 12. 一个完整 Agent Run 在 OpenAI 风格下大概是这样
+
+假设用户说：
+
+```text
+我想退一个订单，订单号 123
+```
+
+OpenAI 风格的 Agent run 不是一条文本流，而是这样演化：
+
+```text
+1. run.started
+   输入进入 Agent runtime
+
+2. current_agent = Triage Agent
+   runtime 准备模型输入：instructions + conversation + tools + handoffs
+
+3. model call #1
+   模型判断这是退款问题
+
+4. handoff_requested
+   模型请求转给 Refund Agent
+
+5. handoff_occurred
+   runtime 切换 current_agent = Refund Agent
+
+6. model call #2
+   Refund Agent 判断需要查订单
+
+7. tool_called
+   模型产生 lookup_order({ order_id: "123" })
+
+8. tool_approval_requested, optional
+   如果这个工具敏感，runtime 暂停等待人工或用户批准
+
+9. tool_output
+   runtime 执行 lookup_order，并把结果作为 tool output 写回 run state
+
+10. model call #3
+    模型读取 tool output，判断是否可退款
+
+11. response.output_text.delta
+    逐步生成面向用户的自然语言回答
+
+12. message_output_created
+    runtime 形成 assistant message item
+
+13. stream.completed
+    run、回调、状态持久化、history compaction 等都完成
+
+14. finalOutput
+    返回最终结果
+```
+
+这才是 OpenAI Agent 的关键：**模型输出的是下一步动作，runtime 决定怎么执行和继续。**
+
+---
+
+## 13. 为什么 OpenAI 的 Agent 显示通常比较稳定
+
+因为它一般不会让 UI 直接面对“半截 JSON、半截工具参数、半截消息”的混乱状态。公开 SDK 暴露出的设计已经体现出几条原则：
+
+第一，**Agent run 有明确状态**。不是只有字符串 append，而是有 run、agent、item、tool、approval、finalOutput。
+
+第二，**事件有层级**。raw model event 是低层；run item event 是 Agent runtime 语义层；agent updated event 是 orchestrator 状态层。([OpenAI][4])
+
+第三，**最终完成不等于最后一个 token 到达**。OpenAI 文档明确要求等待 `stream.completed`，因为最后一个文本 token 后还可能有 session persistence 或 history compaction 等工作。([OpenAI][4])
+
+第四，**调试不是看前端日志，而是看 trace**。Agents SDK 默认服务端路径内置 tracing，每个 run 可以产生模型调用、工具调用、handoffs、guardrails、自定义 spans 的结构化记录，用于调试和评估。([OpenAI 开发者][7])
+
+---
+
+## 14. 你要模仿 OpenAI，重点不是“转发事件”，而是实现 Agent Runtime
+
+所以你现在要做的不是：
+
+```text
+OpenAI event → res.write(event) → frontend
+```
+
+而是：
+
+```text
+你的 Agent Runtime
+  ├─ 管理 run state
+  ├─ 调模型
+  ├─ 解析模型 output items
+  ├─ 执行工具
+  ├─ 处理 handoff
+  ├─ 处理审批暂停
+  ├─ 维护 conversation state
+  ├─ 记录 trace / event log
+  ├─ 生成 finalOutput
+  └─ 给 UI 输出可展示 projection
+```
+
+换句话说，你需要三个协议，而不是一个协议：
+
+```text
+1. Model protocol
+   你和模型怎么通信：Responses API events / output items
+
+2. Runtime protocol
+   Agent 内部怎么表达状态变化：tool_called、tool_output、handoff、approval、state
+
+3. UI protocol
+   前端怎么展示：message、status、tool card、approval card、file card、final answer
+```
+
+OpenAI 做 Agent 的成熟点就在于：**它没有把这三层混成一层。**
+
+---
+
+## 15. 最后一版总结
+
+OpenAI 做 Agent 的方式可以压缩成一句话：
+
+**Agent = model-driven loop + runtime-managed state + tool execution + handoff/approval orchestration + semantic event projections + traces。**
+
+不是：
+
+```text
+LLM 生成 token → 后端转发 token → 前端显示 token
+```
+
+而是：
+
+```text
+用户输入
+  → Agent runtime 创建 run
+  → 当前 Agent 调模型
+  → 模型输出 message / tool call / handoff / reasoning item
+  → runtime 检查 output
+  → runtime 执行工具或切换 Agent 或暂停审批
+  → runtime 把结果写回 run state
+  → 继续调用模型
+  → 直到 final output
+  → runtime 产生完整结果、事件流和 trace
+  → UI 只消费适合展示的 projection
+```
+
+所以你如果要做一个像 OpenAI 那样稳定的 Agent，最重要的是先写清楚这个核心对象：
+
+```ts
+RunState {
+  runId
+  conversationId
+  currentAgent
+  inputItems
+  outputItems
+  toolCalls
+  toolOutputs
+  handoffs
+  interruptions
+  finalOutput
+  status
+}
+```
+
+然后围绕它做：
+
+```text
+model adapter
+tool executor
+handoff router
+approval manager
+state store
+event projector
+UI renderer
+trace logger
+```
+
+这才是 OpenAI Agent 架构的本质。
+
+[1]: https://developers.openai.com/api/docs/guides/agents/define-agents "Agent definitions | OpenAI API"
+[2]: https://developers.openai.com/api/docs/guides/agents/running-agents "Running agents | OpenAI API"
+[3]: https://developers.openai.com/api/docs/guides/function-calling "Function calling | OpenAI API"
+[4]: https://openai.github.io/openai-agents-js/guides/streaming/ "Streaming | OpenAI Agents SDK"
+[5]: https://developers.openai.com/api/docs/guides/reasoning "Reasoning models | OpenAI API"
+[6]: https://developers.openai.com/api/docs/guides/chatkit "ChatKit | OpenAI API"
+[7]: https://developers.openai.com/api/docs/guides/agents/integrations-observability "Integrations and observability | OpenAI API"

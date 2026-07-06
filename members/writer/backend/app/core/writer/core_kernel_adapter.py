@@ -1,0 +1,1507 @@
+"""Writer CoreLoopKernel adapter.
+
+**Boundary contract:**
+
+- ``WriterLLMClientAdapter`` wraps the existing Writer ``llm_client`` (which
+  exposes ``.chat_full(messages, tools=...)``) so it satisfies the Core
+  ``LLMClient`` protocol (``.complete(request) -> LLMResponse``).  For
+  testing, callers can inject any object that satisfies ``LLMClient``.
+
+- ``WriterKit`` implements ``lamtools_core.kernel.RuntimeKit``:
+
+  * **text-only done** — model replies with plain text, no tool calls → done.
+  * **ask_clarification / needs_user_input → wait** — Kit detects
+    ``ask_clarification`` action type and returns ``LoopDecision="wait"``.
+  * **tool_calls → execute_tool → format_tool_result_for_model → continue/done** —
+    Kit delegates tool execution to an injectable ``tool_executor``, formats
+    the result as a tool-role ``ChatMessage``, and continues unless the model
+    signals done.
+
+- ``ReadOnlyToolExecutor`` provides safe read-only tools (read_file, list_dir,
+  search_files, search_content) bounded to a ``work_root`` directory.  All
+  paths are validated to prevent traversal outside work_root.  Output is
+  limited (item counts, text length) to prevent context explosion.  No write,
+  command, or git operations are exposed.
+
+- ``ReadWriteToolExecutor`` extends ``ReadOnlyToolExecutor`` with safe write,
+  edit, and test-run tools (write_file, edit_file, run_tests), also bounded
+  to ``work_root``:
+
+  * **write_file** — create or overwrite a file.  Content length is capped.
+    Parent directories are created automatically.  Path must stay inside
+    work_root.
+  * **edit_file** — replace an exact text segment (old_string → new_string)
+    in an existing file.  Fails if old_string is not found or is ambiguous
+    (appears more than once).  Path must stay inside work_root.
+  * **run_tests** — execute a test command inside work_root through the
+    stable bounded command runner.  Secured by path validation, timeout,
+    and output truncation.  Exit code is returned in metadata.
+
+  No run_command, git, or other dangerous operations are exposed.
+
+- ``run_core_kernel`` is the top-level entry point. It assembles a
+  ``CoreLoopKernel`` and runs it, returning a ``KernelResult``. When
+  ``work_root`` is provided, bounded read/write/test tools are enabled by
+  default. An injected ``tool_executor`` (dict or callable) takes priority.
+  Without ``work_root``, no real file operations are available.
+
+Tool execution uses an injectable ``tool_executor`` (dict or callable).
+When ``work_root`` is set, read-write file tools are available by default.
+No command/git operations are performed by the default tools.
+
+**Core / WriterKit boundary:**
+  - CoreLoopKernel owns the loop skeleton (load state → call model → parse →
+    execute tools → verify → decide → writeback → save).
+  - WriterKit owns all Writer-specific business logic (how to parse
+    model output, what counts as done/wait, how to execute tools).
+  - Kernel never branches on product name; Kit never reaches into Kernel
+    internals.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import datetime
+import json
+import logging
+import os
+import re
+import uuid
+from pathlib import Path
+from typing import Any, Callable, Awaitable
+
+from lamtools_core.event import CoreEvent, EventSink, InMemoryEventLog
+from lamtools_core.kernel import (
+    CoreLoopKernel,
+    KernelResult,
+    KernelStep,
+    KernelTurn,
+    LoopDecision,
+    LoopPolicy,
+    RuntimeKit,
+    VerificationResult,
+    build_response_blocks_for_summary,
+    compact_core_events_for_summary,
+)
+from lamtools_core.llm import (
+    ChatMessage,
+    LLMClient,
+    LLMRequest,
+    LLMResponse,
+    LLMStreamEvent,
+    LLMUsage,
+)
+from lamtools_core.mem import format_session_memory_summary
+from lamtools_core.prompt import PromptContext, format_prompt_sections
+from lamtools_core.runtime import InMemoryRuntimeStateStore, RuntimeState, RuntimeStateStore, RuntimeTurnInput
+from lamtools_core.tool import ToolCall, ToolResult
+from lamtools_core.tool.command import run_subprocess as _run_subprocess
+from lamtools_core.tool.mcp_tools import execute_mcp_tool_call
+from lamtools_core.tool.verification import verify_written_tool_results
+from lamtools_core.tool.workspace import is_within_path as _is_within_path
+from lamtools_core.tool.workspace import validate_workspace_path as _validate_path
+
+from app.core.prompt_assembler import WRITER_TOOLS, get_writer_execution_discipline
+from app.core.writer.agent_runtime import (
+    AgentCall,
+    AgentRegistry,
+    AgentRuntime,
+    AgentRunResult,
+    AgentWriteScope,
+    SubAgentDefinition,
+    default_agent_registry,
+)
+from app.core.writer.command_tools import _validate_command_paths
+from app.core.writer.completion_verifier import CompletionVerifier
+from app.core.writer.failure_specs import failure_recovery_instruction
+from app.core.writer.llm_bridge import WriterLLMClientAdapter
+from app.core.writer.permission import command_permission_decision
+from app.core.writer.read_tools import ReadOnlyToolExecutor
+from app.core.writer.runtime_resources import (
+    cached_mcp_registry,
+    close_writer_runtime_resources,
+    runtime_now_prompt,
+    schedule_writer_startup_prewarm,
+    static_prompt_messages,
+    stream_http_client,
+)
+from app.core.writer.sub_agent_events import SubAgentEventForwardingSink
+from app.core.writer.sub_agent_projection import project_sub_agent_result
+from app.core.writer.sub_agent_workspace import (
+    cleanup_sub_agent_context_files,
+    copy_sub_agent_context_files,
+    create_default_sub_agent_workspace,
+    finalize_sub_agent_workspace,
+)
+from app.core.writer.task_plan import (
+    apply_checklist_update as _apply_checklist_update,
+    auto_advance_plan as _auto_advance_plan,
+    has_delivery_progress as _has_delivery_progress,
+    new_plan_revision as _new_plan_revision,
+    plan_to_active_plan as _plan_to_active_plan,
+)
+from app.core.writer.tool_failure import (
+    looks_like_test_assertion_failure,
+    should_stop_repeated_failure,
+    tool_failure_context,
+    tool_failure_signature,
+)
+from app.core.writer.tool_feedback import (
+    agent_failure_reason,
+    agent_tool_facts_for_model,
+    format_tool_result_for_model as _format_tool_result_for_model,
+)
+from app.core.writer.tool_outcomes import record_tool_outcomes
+from app.core.writer.tools import ReadWriteToolExecutor, resolve_tool_executor as _resolve_tool_executor
+logger = logging.getLogger(__name__)
+
+
+def _exception_summary(exc: BaseException) -> str:
+    """Return a non-empty diagnostic string for exceptions with blank messages."""
+    message = str(exc).strip()
+    if message:
+        return f"{type(exc).__name__}: {message}"
+    return type(exc).__name__
+
+
+# ---------------------------------------------------------------------------
+# 2. WriterKit
+# ---------------------------------------------------------------------------
+
+# Action types that signal the model wants user input
+_WAIT_ACTION_TYPES = frozenset({"ask_clarification", "needs_user_input"})
+
+class WriterKit:
+    """RuntimeKit implementation for Writer CoreLoopKernel.
+
+    Implements ``lamtools_core.kernel.RuntimeKit``:
+
+    - **parse_model_output**: Detects tool calls from LLMResponse and maps
+      Writer action types.  ``ask_clarification`` / ``needs_user_input`` →
+      ``decision_hint="wait"``.  No tool calls and finish_reason="stop" →
+      ``decision_hint="done"``.
+    - **build_model_request**: Injects persona (writer identity), execution
+      discipline, and tool schemas so the model knows it can read/write/edit
+      files, run tests, check git status, and more.
+    - **execute_tool**: Delegates to the injectable ``tool_executor``.
+    - **verify**: Checks file existence for write_file/edit_file calls and
+      inspects written content for stubs/TODOs.
+    - **decide_next**: Applies drift detection (consecutive reads, repeated
+      tools, failure cascade, turn budget) before returning decision.
+    - **writeback**: Tracks recent tools, statuses, and failures in state
+      metadata for drift detection.
+    - Other hooks are no-ops.
+    """
+
+    name: str = "writer-kit"
+
+    def __init__(
+        self,
+        tool_executor: dict[str, Callable[..., Awaitable[ToolResult]]]
+        | Callable[[ToolCall], Awaitable[ToolResult]]
+        | None = None,
+        initial_history: list[ChatMessage] | None = None,
+        work_root: str = "",
+        agent_llm_client: Any = None,
+        runtime_controls: dict[str, dict[str, bool]] | None = None,
+        sub_agent_llm_client_factory: Callable[[SubAgentDefinition, AgentCall], Awaitable[Any]] | None = None,
+        sub_agent_workspace_factory: Callable[[SubAgentDefinition, AgentCall], Awaitable[dict[str, Any] | None]] | None = None,
+        core_event_callback: Callable[[CoreEvent], Awaitable[None]] | None = None,
+        tool_allowlist: set[str] | frozenset[str] | None = None,
+        completion_verifier_enabled: bool = True,
+    ) -> None:
+        """Initialise with optional tool_executor, initial_history, work_root, and agent_llm_client.
+
+        Args:
+            tool_executor: Either a dict mapping tool names to async callables,
+                or a single async callable that accepts a ToolCall and returns
+                a ToolResult.  If None, tool execution returns a stub ok result.
+            initial_history: Prior conversation turns as ChatMessage objects.
+                Only ``user`` and ``assistant`` roles are expected.  These
+                messages are prepended to the kernel's internal history so the
+                LLM sees the full multi-turn context.  The current user
+                message (managed by CoreLoopKernel) must NOT be included here
+                — the kernel appends it automatically.
+            work_root: Working directory for file operations (used by verify
+                to check written files exist on disk).
+            agent_llm_client: The raw Writer LLM client (with .chat_full) for
+                sub-agent execution. When provided, registered agent tools are
+                routed through AgentRuntime. When None, agent tools are not
+                advertised.
+        """
+        self._tool_executor = tool_executor
+        self._initial_history: list[ChatMessage] = list(initial_history) if initial_history else []
+        self._work_root = work_root
+        self._agent_llm_client = agent_llm_client
+        self._runtime_controls = runtime_controls or {}
+        self._sub_agent_llm_client_factory = sub_agent_llm_client_factory
+        self._sub_agent_workspace_factory = sub_agent_workspace_factory or self._default_sub_agent_workspace
+        self._core_event_callback = core_event_callback
+        self._tool_allowlist = frozenset(tool_allowlist) if tool_allowlist is not None else None
+        self._completion_verifier_enabled = completion_verifier_enabled
+        self._agent_runtime: AgentRuntime | None = None
+        self._agent_registry = self._build_agent_registry()
+        self._intervention_pending: str = ""  # System-level repair prompt, injected on next turn
+
+        # MCP integration — loaded lazily on first run_start
+        self._mcp_registry: Any = None
+        self._mcp_loaded: bool = False
+
+        self._effective_tools = self._filter_effective_tools(WRITER_TOOLS)
+
+        if self._agent_llm_client and self._agent_registry.names():
+            self._agent_runtime = AgentRuntime(
+                llm_client=self._agent_llm_client,
+                design_mode_selector=lambda task: "auto",
+                tool_runner=self._agent_tool_runner,
+                registry=self._agent_registry,
+                model_tools=self._effective_tools,
+                work_root=self._work_root,
+                sub_agent_llm_client_factory=self._sub_agent_llm_client_factory,
+                sub_agent_workspace_factory=self._sub_agent_workspace_factory,
+                sub_agent_kernel_runner=self._run_sub_agent_kernel,
+            )
+
+    def _filter_effective_tools(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Advertise only tools that can actually be executed in this runtime."""
+        if not isinstance(self._tool_executor, dict):
+            filtered = [
+                tool for tool in tools
+                if self._model_tool_enabled(str(tool.get("function", {}).get("name", "")))
+            ]
+            if self._tool_allowlist is None:
+                return filtered
+            return [
+                tool for tool in filtered
+                if str(tool.get("function", {}).get("name", "")) in self._tool_allowlist
+            ]
+
+        executable = set(self._tool_executor.keys())
+        if self._agent_llm_client and self._agent_registry.names():
+            executable.update(f"{name}_agent" for name in self._agent_registry.names())
+        executable.add("mcp_tool")
+
+        filtered = [
+            tool for tool in tools
+            if str(tool.get("function", {}).get("name", "")) in executable
+            and self._model_tool_enabled(str(tool.get("function", {}).get("name", "")))
+        ]
+        if self._tool_allowlist is None:
+            return filtered
+        return [
+            tool for tool in filtered
+            if str(tool.get("function", {}).get("name", "")) in self._tool_allowlist
+        ]
+
+    def _model_tool_enabled(self, name: str) -> bool:
+        agent_name = self._agent_name_from_tool(name)
+        if agent_name:
+            return self._agent_enabled(agent_name) and self._tool_enabled(name)
+        return self._tool_enabled(name)
+
+    def _tool_enabled(self, name: str) -> bool:
+        controls = self._runtime_controls.get("tools", {})
+        return bool(controls.get(name, True))
+
+    def _command_policies(self) -> dict[str, object]:
+        controls = self._runtime_controls.get("command_policies", {})
+        return controls if isinstance(controls, dict) else {}
+
+    def _annotate_command_permission(self, call: ToolCall) -> ToolCall:
+        if call.name not in {"run_command", "run_tests"}:
+            return call
+        args = call.arguments if isinstance(call.arguments, dict) else {}
+        command = args.get("command")
+        if not isinstance(command, str) or not command.strip():
+            return call
+        decision = command_permission_decision(command, self._command_policies())
+        call.metadata.update({
+            "permission_group": decision.group,
+            "approval_policy": decision.policy,
+        })
+        call.requires_approval = decision.requires_approval
+        if decision.reason:
+            call.metadata["policy_reason"] = decision.reason
+        return call
+
+    def _agent_enabled(self, name: str) -> bool:
+        controls = self._runtime_controls.get("agents", {})
+        return bool(controls.get(name, True))
+
+    def _agent_name_from_tool(self, tool_name: str) -> str:
+        if not tool_name.endswith("_agent"):
+            return ""
+        agent_name = tool_name[:-6]
+        if self._agent_registry.resolve(agent_name) is None:
+            return ""
+        return agent_name
+
+    def _build_agent_registry(self) -> AgentRegistry:
+        source = default_agent_registry()
+        registry = AgentRegistry()
+        for name in source.names():
+            spec = source.resolve(name)
+            if spec is not None and self._agent_enabled(spec.name):
+                registry.register(spec)
+        return registry
+
+    async def _agent_tool_runner(self, name: str, params: dict[str, Any]) -> str:
+        """Run a tool on behalf of AgentRuntime hooks (search, ui, dependency agents).
+
+        Falls back to the main tool_executor when the tool is registered there.
+        Returns a JSON-stringified result or an error JSON on failure.
+        """
+        agent_work_root = str(params.pop("__agent_work_root", "") or "")
+        executor = self._tool_executor
+        if agent_work_root:
+            executor = _resolve_tool_executor(None, agent_work_root, self._core_event_callback)
+        if executor and isinstance(executor, dict):
+            handler = executor.get(name)
+            if handler is not None:
+                result = handler(ToolCall(id="", name=name, arguments=params))
+                if asyncio.iscoroutine(result):
+                    result = await result
+                return json.dumps({
+                    "ok": result.status == "ok",
+                    "status": result.status,
+                    "content": result.content,
+                    "error": result.error,
+                    "metadata": result.metadata,
+                }, ensure_ascii=False)
+        return json.dumps({
+            "ok": False,
+            "status": "failed",
+            "error": f"工具 {name} 不可用：请求了当前环境没有注册的工具。",
+        }, ensure_ascii=False)
+
+    async def _default_sub_agent_workspace(
+        self,
+        definition: SubAgentDefinition,
+        call: AgentCall,
+    ) -> dict[str, Any] | None:
+        return await create_default_sub_agent_workspace(definition, call, self._work_root)
+
+    def _copy_sub_agent_context_files(self, call: AgentCall, worktree_path: Path) -> list[str]:
+        return copy_sub_agent_context_files(call, self._work_root, worktree_path)
+
+    def _cleanup_sub_agent_context_files(self, workspace: dict[str, Any]) -> None:
+        cleanup_sub_agent_context_files(workspace)
+
+    async def _run_sub_agent_kernel(
+        self,
+        definition: SubAgentDefinition,
+        call: AgentCall,
+        prompt: str,
+        available_tools: frozenset[str],
+        workspace: dict[str, Any],
+    ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+        llm_client = self._agent_llm_client
+        if self._sub_agent_llm_client_factory is not None:
+            llm_client = await self._sub_agent_llm_client_factory(definition, call)
+        if llm_client is None:
+            raise RuntimeError("SubAgent runtime has no LLM client")
+
+        if hasattr(llm_client, "complete"):
+            core_llm = llm_client
+        elif hasattr(llm_client, "chat_full"):
+            core_llm = WriterLLMClientAdapter(writer_client=llm_client)
+        else:
+            raise RuntimeError("SubAgent LLM client must have .chat_full() or .complete()")
+
+        work_root = str(workspace.get("work_root") or self._work_root or "")
+        if workspace.get("work_root"):
+            tool_executor = _resolve_tool_executor(None, work_root)
+        else:
+            tool_executor = _resolve_tool_executor(self._tool_executor, work_root or None)
+
+        nested_kit = WriterKit(
+            tool_executor=tool_executor,
+            initial_history=[],
+            work_root=work_root,
+            agent_llm_client=None,
+            runtime_controls=self._runtime_controls,
+            tool_allowlist=available_tools,
+            core_event_callback=self._core_event_callback,
+            completion_verifier_enabled=False,
+        )
+        event_log = InMemoryEventLog()
+
+        kernel = CoreLoopKernel(
+            kit=nested_kit,
+            llm_client=core_llm,
+            state_store=InMemoryRuntimeStateStore(),
+            event_sink=SubAgentEventForwardingSink(
+                event_log=event_log,
+                core_event_callback=self._core_event_callback,
+                definition=definition,
+                call=call,
+            ),
+            policy=LoopPolicy(
+                parallel_tool_names=(),
+            ),
+        )
+        session_id = f"sub:{definition.name}:{uuid.uuid4().hex[:8]}"
+        result = await kernel.run(RuntimeTurnInput(
+            user_message=prompt,
+            metadata={"session_id": session_id},
+        ))
+        nested_events = [event for _, event in event_log.replay_since()]
+        data, tool_records, reasoning_blocks, diagnostics = project_sub_agent_result(result, nested_events)
+        self._cleanup_sub_agent_context_files(workspace)
+        delivery = await self._finalize_sub_agent_workspace(definition, workspace, result.decision)
+        if delivery:
+            diagnostics["workspace_delivery"] = delivery
+            if not delivery.get("ok", False):
+                diagnostics.setdefault("fallback_reason", "workspace_delivery_failed")
+                diagnostics.setdefault("error", str(delivery.get("error") or "SubAgent workspace delivery failed"))
+                return {}, tool_records, reasoning_blocks, diagnostics
+        return data, tool_records, reasoning_blocks, diagnostics
+
+    async def _finalize_sub_agent_workspace(
+        self,
+        definition: SubAgentDefinition,
+        workspace: dict[str, Any],
+        decision: str,
+    ) -> dict[str, Any]:
+        return await finalize_sub_agent_workspace(definition, workspace, self._work_root, decision)
+
+    # -- RuntimeKit protocol --------------------------------------------------
+
+    async def on_run_start(
+        self, state: RuntimeState, turn_input: RuntimeTurnInput
+    ) -> None:
+        if state.metadata is None:
+            state.metadata = {}
+        if turn_input.user_message:
+            state.metadata["current_task"] = turn_input.user_message
+            state.metadata["original_task"] = turn_input.user_message
+            state.metadata.pop("completion_verifier_attempt", None)
+            state.metadata.pop("completion_verifier_last_summary", None)
+        if not self._mcp_loaded:
+            try:
+                self._mcp_registry = await cached_mcp_registry(self._work_root)
+            except Exception as exc:
+                logger.warning("MCP load failed: %s", exc)
+                self._mcp_registry = None
+            self._mcp_loaded = True
+
+    async def build_context(
+        self,
+        state: RuntimeState,
+        turn_input: RuntimeTurnInput,
+        history: list[ChatMessage],
+        step_index: int,
+    ) -> PromptContext:
+        return PromptContext(
+            session_id=state.session_id,
+            user_message=turn_input.user_message,
+            history=history,
+            state=state,
+        )
+
+    async def build_model_request(
+        self, state: RuntimeState, context: PromptContext
+    ) -> LLMRequest:
+        # Stable prefix first. Current time, task/session state, history,
+        # approvals, and queued input stay out of the cache.
+        messages = await static_prompt_messages(self._work_root)
+        messages.append(ChatMessage(
+            role="system",
+            content=runtime_now_prompt(),
+            metadata={"key": "runtime_now", "kind": "context"},
+        ))
+        # 3.5 Inject path exhaustion intervention (consumed once per turn)
+        if self._intervention_pending:
+            messages.append(ChatMessage(
+                role="system",
+                content=self._intervention_pending,
+                metadata={"key": "intervention", "kind": "instruction"},
+            ))
+            self._intervention_pending = ""
+
+        # 4. Inject runtime context from state.metadata and context.metadata.
+        #    state.metadata is populated by writeback (recent_tools, failures,
+        #    drift_warning) and by the service (project_rules, git_state).
+        #    context.metadata comes from CoreLoopKernel.
+        hook_sources: list[dict] = [context.metadata or {}]
+        if state.metadata:
+            hook_sources.append(state.metadata)
+        merged_context: dict[str, Any] = {}
+        for src in hook_sources:
+            merged_context.update(src)
+
+        if merged_context:
+            context_parts: list[str] = []
+            if "project_rules" in merged_context:
+                context_parts.append(f"[Project Rules]\n{merged_context['project_rules']}")
+            if "plan_progress" in merged_context:
+                pp = merged_context["plan_progress"]
+                context_parts.append(f"[Plan Progress] {pp.get('completed_steps', 0)}/{pp.get('total_steps', 0)} steps completed. Current: {pp.get('current_step', 'none')}")
+            if "recent_failures" in merged_context:
+                failures = merged_context["recent_failures"]
+                context_parts.append(f"[Recent Failures]\n" + "\n".join(f"- {f}" for f in failures[:5]))
+                recovery = failure_recovery_instruction([str(f) for f in failures[:5]])
+                if recovery:
+                    context_parts.append(f"[Failure Recovery]\n{recovery}")
+            if "session_memory_summary" in merged_context:
+                ms = merged_context["session_memory_summary"]
+                if isinstance(ms, dict):
+                    context_parts.append(format_session_memory_summary(ms))
+            if "git_context" in merged_context:
+                gc = merged_context["git_context"]
+                context_parts.append(f"[Git] branch={gc.get('branch', '?')}, head={gc.get('head', '?')}, dirty={gc.get('dirty_files_count', 0)}")
+            elif "git_state" in merged_context:
+                gs = merged_context["git_state"]
+                current = gs.get("current") or {}
+                parts = []
+                if gs.get("task_branch"):
+                    parts.append(f"task_branch={gs['task_branch']}")
+                if current.get("branch"):
+                    parts.append(f"branch={current['branch']}")
+                if current.get("head"):
+                    parts.append(f"head={current['head'][:12]}")
+                if parts:
+                    context_parts.append(f"[Git] {' '.join(parts)}")
+            # Inject active plan from state metadata
+            if "active_plan" in merged_context:
+                ap = merged_context["active_plan"]
+                plan_lines = []
+                if ap.get("plan_summary"):
+                    plan_lines.append(f"Summary: {ap['plan_summary']}")
+                if ap.get("plan_files"):
+                    plan_lines.append(f"Planned files: {', '.join(ap['plan_files'])}")
+                if ap.get("plan_steps"):
+                    for s in ap["plan_steps"]:
+                        sid = s.get("id", "?")
+                        desc = s.get("description", "")
+                        status = s.get("status", "pending")
+                        plan_lines.append(f"  [{sid}] ({status}) {desc}")
+                if plan_lines:
+                    context_parts.append("[Active Plan — follow this step by step]\n" + "\n".join(plan_lines))
+            if "drift_warning" in merged_context:
+                context_parts.append(f"[Drift Warning] {merged_context['drift_warning']}")
+            if "empty_stop_retry_instruction" in merged_context:
+                context_parts.append(
+                    "[Empty Stop Recovery]\n"
+                    f"{merged_context['empty_stop_retry_instruction']}"
+                )
+            if context_parts:
+                messages.append(ChatMessage(
+                    role="system",
+                    content=format_prompt_sections("[Writer Context]", context_parts),
+                    metadata={"key": "hook_context", "kind": "constraint"},
+                ))
+
+        # 5. Conversation history last. This is the most volatile part of the
+        # request and should not precede stable system content.
+        if self._initial_history:
+            messages.extend(self._initial_history)
+        messages.extend(context.history)
+
+        # Fallback: if no messages at all, use user_message from context.
+        if not messages and context.user_message:
+            messages.append(ChatMessage(role="user", content=context.user_message))
+
+        tools = list(self._effective_tools)
+        # Append MCP tools when registry is loaded
+        if self._mcp_registry is not None and self._mcp_loaded:
+            mcp_defs = self._mcp_registry.tool_definitions()
+            if mcp_defs:
+                if self._tool_allowlist is not None:
+                    mcp_defs = [
+                        tool for tool in mcp_defs
+                        if str(tool.get("function", {}).get("name", "")) in self._tool_allowlist
+                    ]
+                tools = tools + mcp_defs
+        return LLMRequest(messages=messages, tools=tools)
+
+    async def parse_model_output(
+        self, state: RuntimeState, response: LLMResponse
+    ) -> KernelTurn:
+        """Parse LLMResponse into a KernelTurn.
+
+        Decision logic:
+        - If response has tool_calls → continue (tool execution follows).
+        - If finish_reason is "stop" and no tool_calls → check for
+          wait-signalling action types.  Since this is a text-only response
+          we treat it as ``done`` unless the content contains a wait signal.
+        - If finish_reason is "length" → continue.
+        """
+        if state.metadata is None:
+            state.metadata = {}
+
+        tool_calls: list[ToolCall] = []
+        decision_hint: LoopDecision = "continue"
+        wait_reason = ""
+
+        if response.tool_calls:
+            state.metadata.pop("empty_stop_count", None)
+            state.metadata.pop("empty_stop_without_delivery_count", None)
+            state.metadata.pop("empty_stop_retry_instruction", None)
+            for index, tc in enumerate(response.tool_calls):
+                tool_name = str(tc.name or "").strip()
+                # Clarification/user-input actions are control decisions, not
+                # executable tools in this minimal experiment.
+                if tool_name in _WAIT_ACTION_TYPES:
+                    decision_hint = "wait"
+                    wait_reason = f"Model requested: {tool_name}"
+                    continue
+                arguments = tc.arguments if isinstance(tc.arguments, dict) else {}
+                call_id = str(tc.id or "").strip()
+                if not tool_name:
+                    raw_arguments = ""
+                    if isinstance(tc.metadata, dict):
+                        raw_arguments = str(tc.metadata.get("raw_arguments") or "")
+                    arguments = {
+                        "reason": "empty_tool_name",
+                        "raw_arguments": raw_arguments,
+                    }
+                    tool_name = "invalid_tool_call"
+                    call_id = call_id or f"invalid-tool-call-{index}"
+                elif not call_id:
+                    call_id = f"functions.{tool_name}:{index}"
+
+                call = ToolCall(
+                    id=call_id,
+                    name=tool_name,
+                    arguments=arguments,
+                )
+                call = self._annotate_command_permission(call)
+                tool_calls.append(call)
+        elif response.finish_reason == "stop":
+            # Text-only response — check if content signals wait
+            content = (response.content or "").lower()
+            if any(signal in content for signal in ("ask_clarification", "needs_user_input")):
+                decision_hint = "wait"
+                wait_reason = "Model text signals wait"
+            elif not content.strip():
+                attempts = int((state.metadata or {}).get("empty_stop_count", 0))
+                has_delivery = _has_delivery_progress(state.metadata or {})
+                if attempts <= 0:
+                    state.metadata["empty_stop_count"] = 1
+                    state.metadata["empty_stop_retry_instruction"] = (
+                        "The previous model turn stopped with no final text and no tool calls. "
+                        + (
+                            "Deliverables already exist, so provide a concise visible final answer "
+                            "summarizing completed files, verification, and any caveats. Do not call "
+                            "more tools unless required to verify the final answer."
+                            if has_delivery
+                            else
+                            "Continue the task now: either call the needed tools to create and verify "
+                            "deliverables, or provide a visible failure reason if the task cannot proceed."
+                        )
+                    )
+                    decision_hint = "continue"
+                else:
+                    state.metadata["empty_stop_count"] = attempts + 1
+                    decision_hint = "failed"
+                    wait_reason = "Model stopped twice with no content and no tools."
+            else:
+                state.metadata.pop("empty_stop_count", None)
+                state.metadata.pop("empty_stop_without_delivery_count", None)
+                state.metadata.pop("empty_stop_retry_instruction", None)
+                decision_hint = "done"
+        elif response.finish_reason == "length":
+            decision_hint = "continue"
+        else:
+            # Unknown finish reason — treat as done to avoid infinite loop
+            decision_hint = "done"
+
+        reply = response.content or ""
+        if decision_hint == "failed" and not reply:
+            reply = (
+                "模型连续两次返回空结果：没有正文，也没有工具调用。"
+                "本次任务已中断，避免把未完成任务误标记为完成。"
+            )
+
+        return KernelTurn(
+            reply=reply,
+            tool_calls=tool_calls,
+            decision_hint=decision_hint,
+            wait_reason=wait_reason,
+        )
+
+    async def execute_tool(
+        self, state: RuntimeState, call: ToolCall
+    ) -> ToolResult:
+        """Execute a tool call via the injectable tool_executor.
+
+        Agent tools are routed through AgentRuntime. MCP tools (mcp_tool,
+        mcp__*) are routed through MCPRegistry.
+        """
+        if call.name == "invalid_tool_call":
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="failed",
+                error="模型返回了无效工具调用：工具名为空。",
+                content="请重新选择一个已注册工具，并提供完整参数。",
+                metadata=dict(call.arguments if isinstance(call.arguments, dict) else {}),
+            )
+
+        # --- Agent dispatch ---
+        if self._agent_name_from_tool(call.name):
+            return await self._execute_agent_tool(state, call)
+
+        # --- MCP dispatch (mcp_tool / mcp__*) ---
+        if call.name == "mcp_tool" or call.name.startswith("mcp__"):
+            return await self._execute_mcp_tool(state, call)
+
+        if call.requires_approval:
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="blocked",
+                error=(
+                    "命令需要运行前确认；当前运行通道未收到用户批准。"
+                    "可在设置中将该命令组改为自动允许，或通过审批流程后再执行。"
+                ),
+                metadata=dict(call.metadata),
+            )
+
+        pending_test_repair = ""
+        if isinstance(state.metadata, dict):
+            pending_test_repair = str(state.metadata.get("test_assertion_repair_required") or "").strip()
+        if pending_test_repair and call.name in {"run_command", "run_tests"}:
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="failed",
+                error="Test assertion repair is pending; edit production code before running more commands.",
+                content=(
+                    "A test command already reached the suite and failed an assertion. "
+                    "The next useful action is to modify the relevant production file with edit_file/write_file, "
+                    "then rerun the same or equivalent test.\n\n"
+                    f"Failure evidence:\n{pending_test_repair}"
+                ),
+                metadata={"error_type": "TestAssertionRepairPending"},
+            )
+
+        if self._tool_executor is None:
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="ok",
+                content=f"[stub] {call.name} executed",
+            )
+
+        try:
+            if isinstance(self._tool_executor, dict):
+                logger.info(f"Executing tool: {call.name} args={call.arguments}")
+                handler = self._tool_executor.get(call.name)
+                if handler is None:
+                    # Return a clear message for tools that are defined in
+                    # WRITER_TOOLS but not yet implemented in the executor.
+                    # Missing execution is a tool failure, not a successful no-op.
+                    return ToolResult(
+                        call_id=call.id,
+                        name=call.name,
+                        status="failed",
+                        error=f"工具 {call.name} 不可用：请求了当前环境没有注册的工具。",
+                        content=f"可用工具：{', '.join(sorted(self._tool_executor.keys()))}",
+                    )
+                runtime_keys = {}
+                sentinel = object()
+                if call.name in {"run_command", "run_tests"}:
+                    runtime_keys = {
+                        "_runtime_session_id": state.session_id,
+                        "_runtime_run_id": state.run_id,
+                    }
+                previous = {key: call.metadata.get(key, sentinel) for key in runtime_keys}
+                call.metadata.update(runtime_keys)
+                try:
+                    result = handler(call)
+                    if asyncio.iscoroutine(result):
+                        result = await result
+                    return result
+                finally:
+                    for key, value in previous.items():
+                        if value is sentinel:
+                            call.metadata.pop(key, None)
+                        else:
+                            call.metadata[key] = value
+            else:
+                # Single callable
+                result = self._tool_executor(call)
+                if asyncio.iscoroutine(result):
+                    result = await result
+                return result
+        except Exception as exc:
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="failed",
+                error=f"Tool execution error: {_exception_summary(exc)}",
+                metadata={"error_type": type(exc).__name__},
+            )
+
+    async def preflight_tool_calls(
+        self,
+        state: RuntimeState,
+        calls: list[ToolCall],
+    ) -> dict[str, ToolResult]:
+        _ = state
+        sub_agent_calls = [call for call in calls if call.name == "sub_agent"]
+        if len(sub_agent_calls) < 2 or self._agent_runtime is None:
+            return {}
+        blocked = self._parallel_sub_agent_scope_error(sub_agent_calls)
+        if not blocked:
+            return {}
+        return {
+            call.id: ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="failed",
+                content=blocked,
+                error=blocked,
+                metadata={"error": "parallel_write_scope_conflict"},
+            )
+            for call in sub_agent_calls
+        }
+
+    def _parallel_sub_agent_scope_error(self, calls: list[ToolCall]) -> str:
+        if self._agent_runtime is None:
+            return ""
+        write_items: list[tuple[str, AgentWriteScope]] = []
+        for call in calls:
+            args = call.arguments if isinstance(call.arguments, dict) else {}
+            options = args.get("options") if isinstance(args.get("options"), dict) else {}
+            agent_call = AgentCall(
+                name="sub",
+                task=str(args.get("task") or args.get("task_description") or ""),
+                mode=str(args.get("mode") or "auto"),
+                clean=bool(args.get("clean") or False),
+                options=dict(options),
+            )
+            definition = self._agent_runtime._sub_agent_definition_for_call(agent_call)
+            scope = self._agent_runtime._write_scope_for_call(definition, agent_call)
+            missing = self._agent_runtime._write_scope_error(definition, scope)
+            if missing:
+                return missing
+            if self._agent_runtime._is_write_capable(definition) and scope is not None:
+                write_items.append((definition.name, scope))
+        for index, (left_name, left_scope) in enumerate(write_items):
+            for right_name, right_scope in write_items[index + 1:]:
+                if self._agent_runtime._scopes_conflict(left_scope, right_scope):
+                    return (
+                        "并行写入范围冲突："
+                        f"{left_name}({', '.join(left_scope.paths)}) 与 "
+                        f"{right_name}({', '.join(right_scope.paths)}) 可能修改同一文件区域。"
+                        "请重新拆分任务或顺序执行。"
+                    )
+        return ""
+
+    # -- Agent dispatch --------------------------------------------------------
+
+    async def _execute_mcp_tool(
+        self, state: RuntimeState, call: ToolCall
+    ) -> ToolResult:
+        """Route mcp_tool / mcp__* calls to MCPRegistry."""
+        _ = state
+        return await execute_mcp_tool_call(
+            call,
+            caller=self._mcp_registry,
+            unavailable_error="MCP not available (no work_root configured)",
+        )
+
+    async def _execute_agent_tool(
+        self, state: RuntimeState, call: ToolCall
+    ) -> ToolResult:
+        """Route a concrete agent tool through AgentRuntime."""
+        if self._agent_runtime is None:
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="failed",
+                error="Agent runtime not configured (no llm_client provided to WriterKit)",
+            )
+
+        args = call.arguments if isinstance(call.arguments, dict) else {}
+        name = self._agent_name_from_tool(call.name) or ""
+        task = args.get("task", args.get("task_description", ""))
+        mode = args.get("mode", "auto")
+        clean = bool(args.get("clean") or args.get("force") or args.get("force_redesign"))
+        nested_options = args.get("options")
+        agent_options = dict(nested_options) if isinstance(nested_options, dict) else {}
+        agent_options.update({
+            k: v
+            for k, v in args.items()
+            if k not in {"task", "task_description", "mode", "clean", "force", "force_redesign", "options"}
+        })
+
+        if not name or not task:
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="failed",
+                error=f"{call.name} requires 'task' argument",
+            )
+
+        mode = str(mode or "auto")
+
+        agent_call = AgentCall(
+            name=name,
+            task=task,
+            mode=mode,
+            clean=clean,
+            options=agent_options,
+        )
+        logger.info(f"Agent dispatch: name={name} mode={mode} task={task[:80]}...")
+        try:
+            result: AgentRunResult = await self._agent_runtime.run(
+                state.session_id, agent_call
+            )
+        except Exception as exc:
+            logger.error(f"Agent runtime error: {exc}", exc_info=True)
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="failed",
+                error=f"Agent execution failed: {exc}",
+            )
+
+        metadata = result.metadata or {}
+        valid = metadata.get("valid_design", False)
+
+        # Return the agent output as tool result
+        content = result.output or f"[Agent {name} completed with no output]"
+        tool_metadata = {
+            **metadata,
+            "agent_name": metadata.get("agent_name") or metadata.get("agent") or result.name,
+            "runtime_agent": result.name,
+            "valid_design": valid,
+            "winner_name": metadata.get("winner_name", ""),
+        }
+        facts = agent_tool_facts_for_model(result.name, tool_metadata)
+        if facts:
+            tool_metadata["tool_facts"] = facts
+        failure_reason = agent_failure_reason(result.name, tool_metadata, content)
+        if failure_reason:
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="failed",
+                content=content,
+                error=failure_reason,
+                metadata=tool_metadata,
+            )
+        return ToolResult(
+            call_id=call.id,
+            name=call.name,
+            status="ok",
+            content=content,
+            metadata=tool_metadata,
+        )
+
+    async def format_tool_result_for_model(
+        self, state: RuntimeState, call: ToolCall, result: ToolResult
+    ) -> ChatMessage:
+        """Format a ToolResult as a tool-role ChatMessage for the model.
+
+        On failure, includes the original tool call context (name + arguments)
+        and actionable guidance so the model can correct course instead of
+        blindly retrying the same call.
+        """
+        _ = state
+        return _format_tool_result_for_model(call, result)
+
+    def _should_run_completion_verifier(
+        self,
+        state: RuntimeState,
+        turn: KernelTurn,
+        tool_results: list[ToolResult],
+    ) -> bool:
+        if not self._completion_verifier_enabled:
+            return False
+        if not self._work_root:
+            return False
+        if tool_results or turn.tool_calls:
+            return False
+        if not turn.is_natural_stop or turn.decision_hint != "done":
+            return False
+        written_files = state.metadata.get("written_files") if isinstance(state.metadata, dict) else None
+        if not isinstance(written_files, list):
+            return False
+        artifact_suffixes = {
+            ".html",
+            ".htm",
+            ".css",
+            ".js",
+            ".mjs",
+            ".jsx",
+            ".ts",
+            ".tsx",
+            ".py",
+        }
+        artifact_names = {"package.json", "pyproject.toml", "requirements.txt"}
+        for item in written_files:
+            path = Path(str(item).strip())
+            if path.suffix.lower() in artifact_suffixes or path.name.lower() in artifact_names:
+                return True
+        return False
+
+    async def _run_completion_verifier(self, state: RuntimeState) -> VerificationResult:
+        max_attempts = 3
+        attempt = int(state.metadata.get("completion_verifier_attempt", 0)) + 1
+        task = str(state.metadata.get("current_task") or state.metadata.get("original_task") or "")
+        verifier = CompletionVerifier()
+        result = await verifier.verify(self._work_root, task=task)
+        summaries = state.metadata.setdefault("completion_verifier_summaries", [])
+        if isinstance(summaries, list):
+            summaries.append(result.summary)
+            del summaries[:-10]
+        state.metadata["completion_verifier_last_summary"] = result.summary
+        if result.passed:
+            state.metadata.pop("completion_verifier_attempt", None)
+            return VerificationResult(
+                passed=True,
+                required=True,
+                summary=result.summary,
+                attempt=0,
+                max_attempts=max_attempts,
+                metadata={"completion_verifier": "passed"},
+            )
+
+        state.metadata["completion_verifier_attempt"] = attempt
+        repair_prompt = result.repair_prompt(attempt, max_attempts)
+        self._intervention_pending = repair_prompt
+        return VerificationResult(
+            passed=False,
+            required=True,
+            summary=result.summary,
+            repair_prompt=repair_prompt,
+            attempt=attempt,
+            max_attempts=max_attempts,
+            metadata={"completion_verifier": "failed"},
+        )
+
+    async def verify(
+        self,
+        state: RuntimeState,
+        turn: KernelTurn,
+        tool_results: list[ToolResult],
+    ) -> VerificationResult:
+        """Verify tool execution results.
+
+        Checks performed:
+        - If write_file/edit_file was called successfully, verify the file
+          actually exists on disk.
+        - If files were written, check first 500 chars for stub indicators.
+        - If any tool failed, mark verification as failed.
+        """
+        # Check for tool failures first
+        failed = [r for r in tool_results if r.status == "failed"]
+        if failed:
+            names = ", ".join(r.name for r in failed)
+            assertion_failures = [r for r in failed if looks_like_test_assertion_failure(r)]
+            if assertion_failures and not _has_delivery_progress(state.metadata):
+                failure_context = tool_failure_context(assertion_failures[-1])
+                state.metadata["test_assertion_repair_required"] = failure_context
+                self._intervention_pending = (
+                    "TEST ASSERTION FAILURE DETECTED.\n"
+                    "The command reached the test suite and failed an assertion, so this is product feedback, "
+                    "not a command/path discovery problem.\n"
+                    "Next required action: edit the relevant production file with edit_file or write_file using "
+                    "the smallest fix, then rerun an equivalent test command. Do not keep changing Python paths, "
+                    "working directories, or equivalent pytest invocations unless the latest output failed before "
+                    "tests were collected.\n\n"
+                    f"Failure evidence:\n{failure_context}"
+                )
+            return VerificationResult(
+                passed=False,
+                required=True,
+                summary=f"{len(failed)} tool(s) failed: {names}",
+                repair_prompt=f"Tool execution failed: {names}. Check errors and retry.",
+                attempt=0,
+                max_attempts=3,
+            )
+
+        if self._should_run_completion_verifier(state, turn, tool_results):
+            return await self._run_completion_verifier(state)
+
+        return verify_written_tool_results(self._work_root, tool_results)
+
+    async def decide_next(
+        self,
+        state: RuntimeState,
+        turn: KernelTurn,
+        verification: VerificationResult,
+        step: KernelStep,
+    ) -> LoopDecision:
+        """Return the model's decision hint directly.
+
+        The model can stop only by returning a no-tool final response. Any
+        tool call is handled by the Core loop as more work, even if this Kit
+        accidentally returns ``done``.
+
+        One safety net: if the exact same tool call failure repeats 5+
+        consecutive times, stop as failed so it cannot masquerade as done.
+        """
+        hint = turn.decision_hint
+
+        if self._should_stop_repeated_failure(state, step):
+            return "failed"
+
+        if verification.required and not verification.passed:
+            if verification.attempt >= verification.max_attempts:
+                return "failed"
+            return "continue"
+
+        return hint
+
+    def _should_stop_repeated_failure(self, state: RuntimeState, step: KernelStep) -> bool:
+        return should_stop_repeated_failure(state.metadata, step.tool_steps)
+
+    @staticmethod
+    def _tool_failure_signature(call: ToolCall, result: ToolResult | None) -> str:
+        return tool_failure_signature(call, result)
+
+    @staticmethod
+    def _tool_failure_context(result: ToolResult) -> str:
+        return tool_failure_context(result)
+
+    @staticmethod
+    def _looks_like_test_assertion_failure(result: ToolResult) -> bool:
+        return looks_like_test_assertion_failure(result)
+
+    async def writeback(
+        self,
+        state: RuntimeState,
+        turn: KernelTurn,
+        tool_results: list[ToolResult],
+        verification: VerificationResult,
+        decision: LoopDecision,
+    ) -> None:
+        """Track tool calls, statuses, failures, and category-level outcomes."""
+        if state.metadata is None:
+            state.metadata = {}
+
+        record_tool_outcomes(state.metadata, list(turn.tool_calls), tool_results)
+
+        plan_changed = False
+
+        # Create active plan from write_checklist results
+        for tr in tool_results:
+            if tr.name == "write_checklist" and tr.status == "ok" and tr.metadata:
+                task_plan = tr.metadata.get("task_plan") or {}
+                if isinstance(task_plan, dict):
+                    task_plan.setdefault("revision", 0)
+                    _new_plan_revision(task_plan, "initial checklist created", "create_plan", {
+                        "files": task_plan.get("files", []),
+                    })
+                    state.metadata["task_plan"] = task_plan
+                    plan_changed = True
+                break
+
+        # Apply explicit incremental checklist updates.
+        for tr in tool_results:
+            if tr.name != "update_checklist" or tr.status != "ok" or not tr.metadata:
+                continue
+            update = tr.metadata.get("checklist_update")
+            if isinstance(update, dict):
+                current_plan = state.metadata.get("task_plan")
+                state.metadata["task_plan"] = _apply_checklist_update(
+                    current_plan if isinstance(current_plan, dict) else None,
+                    update,
+                )
+                plan_changed = True
+
+        # Auto-complete the current step when its declared deliverables were produced.
+        current_plan = state.metadata.get("task_plan")
+        if isinstance(current_plan, dict) and _auto_advance_plan(current_plan, tool_results):
+            state.metadata["task_plan"] = current_plan
+            plan_changed = True
+
+        if plan_changed and isinstance(state.metadata.get("task_plan"), dict):
+            state.metadata["active_plan"] = _plan_to_active_plan(state.metadata["task_plan"])
+
+    async def on_run_end(
+        self, state: RuntimeState, result: KernelResult
+    ) -> None:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# 4. run_core_kernel — top-level entry point
+# ---------------------------------------------------------------------------
+
+
+async def run_core_kernel(
+    goal: str,
+    session_id: str,
+    llm_client: Any | None = None,
+    tool_executor: dict[str, Callable[..., Awaitable[ToolResult]]]
+    | Callable[[ToolCall], Awaitable[ToolResult]]
+    | None = None,
+    work_root: str | None = None,
+    history: list[dict[str, str]] | None = None,
+    state_store: RuntimeStateStore | None = None,
+    live_event_callback: Callable[[CoreEvent], Awaitable[None]] | None = None,
+    runtime_controls: dict[str, dict[str, bool]] | None = None,
+    sub_agent_llm_client_factory: Callable[[SubAgentDefinition, AgentCall], Awaitable[Any]] | None = None,
+    sub_agent_workspace_factory: Callable[[SubAgentDefinition, AgentCall], Awaitable[dict[str, Any] | None]] | None = None,
+    cancel_event: asyncio.Event | None = None,
+) -> KernelResult:
+    """Run Writer through CoreLoopKernel.
+
+    Args:
+        goal: The user's task / message.
+        session_id: Session identifier.
+        llm_client: Writer llm_client (has .chat_full) or Core LLMClient.
+            If None, a ``WriterLLMClientAdapter`` must be constructable —
+            but for testing you should always pass one explicitly.
+        tool_executor: Injectable tool executor — either a dict mapping
+            tool names to async callables, or a single async callable.
+            If None and *work_root* is provided, the bounded read-write
+            default tool executor is used. If None and *work_root* is also
+            None, tool execution returns stub ok results.
+            When both *tool_executor* and *work_root* are provided, the
+            injected executor takes priority but the defaults are merged
+            underneath — so an injected dict can override individual
+            tools while still falling back to default handlers for the rest.
+        work_root: Working directory root for file tools.  When provided
+            (and *tool_executor* is None or a dict), default tool handlers
+            are enabled.  When omitted, no real file operations are
+            available — only stub results or the injected executor.
+        history: Prior conversation turns as ``[{"role": ..., "content":
+            "..."}]`` dicts. ``system`` summary blocks are preserved;
+            ``user`` and ``assistant`` roles remain part of the visible
+            conversation; ``tool``, ``internal``, or other roles are
+            filtered out. These messages are prepended to the LLM request
+            so the model sees the full multi-turn context. The current
+            user message (``goal``) must NOT be included here — the
+            kernel appends it automatically. At most 20 entries are used.
+        state_store: Optional Core runtime state store. Services should pass
+            their persistent member-backed store; tests may rely on the
+            in-memory default.
+        live_event_callback: Optional callback invoked as each Core event is
+            emitted. Services use it to bridge runtime progress to SSE.
+
+    Returns:
+        KernelResult with the final decision, message, and step history.
+    """
+    # Build LLMClient adapter
+    if llm_client is None:
+        raise ValueError("llm_client must be provided")
+
+    # Keep a reference to the raw Writer LLM client before wrapping for AgentRuntime
+    raw_writer_client: Any = None
+    if hasattr(llm_client, "complete"):
+        # Already a Core LLMClient
+        core_llm = llm_client
+        raw_writer_client = llm_client
+    elif hasattr(llm_client, "chat_full"):
+        # Writer-style client
+        raw_writer_client = llm_client
+        core_llm = WriterLLMClientAdapter(writer_client=llm_client)
+    else:
+        raise ValueError(
+            "llm_client must have .chat_full() or .complete() method"
+        )
+
+    # Resolve effective tool_executor
+    effective_executor = _resolve_tool_executor(tool_executor, work_root, live_event_callback)
+
+    # Convert history dicts to ChatMessage objects. Keep summary system entries
+    # model-visible after capping, then use the remaining slots for the latest
+    # conversation turns while preserving original order in the final list.
+    initial_history: list[ChatMessage] = []
+    if history:
+        filtered_history: list[tuple[int, ChatMessage]] = []
+        for index, entry in enumerate(history):
+            role = entry.get("role", "")
+            content = entry.get("content", "")
+            if not content:
+                continue
+            if role in ("system", "user", "assistant"):
+                filtered_history.append((index, ChatMessage(role=role, content=content)))
+        system_entries = [item for item in filtered_history if item[1].role == "system"]
+        if len(system_entries) >= 20:
+            kept_indices = {index for index, _ in system_entries[-20:]}
+        else:
+            conversation_budget = 20 - len(system_entries)
+            conversation_entries = [item for item in filtered_history if item[1].role in ("user", "assistant")]
+            kept_indices = {index for index, _ in system_entries}
+            kept_indices.update(index for index, _ in conversation_entries[-conversation_budget:])
+        initial_history.extend(
+            message
+            for index, message in filtered_history
+            if index in kept_indices
+        )
+
+    # Build Kit with initial_history, work_root, and agent_llm_client for agent support
+    kit = WriterKit(
+        tool_executor=effective_executor,
+        initial_history=initial_history,
+        work_root=work_root or "",
+        agent_llm_client=raw_writer_client,
+        runtime_controls=runtime_controls,
+        sub_agent_llm_client_factory=sub_agent_llm_client_factory,
+        sub_agent_workspace_factory=sub_agent_workspace_factory,
+        core_event_callback=live_event_callback,
+    )
+
+    # Build state store
+    effective_state_store = state_store or InMemoryRuntimeStateStore()
+
+    # Build event sink (collects events in memory)
+    event_log = InMemoryEventLog()
+
+    class _EventSink:
+        async def emit(self, event: CoreEvent) -> None:
+            event_log.append(event)
+            if live_event_callback is not None:
+                await live_event_callback(event)
+
+    # Build policy
+    context_window = int(getattr(raw_writer_client, "context_window", 0) or 0)
+    policy = LoopPolicy(
+        context_window_tokens=context_window if context_window > 0 else None,
+        compact_trigger_ratio=0.8,
+        parallel_tool_names=("sub_agent",),
+    )
+
+    # Build kernel. WriterKit handles all lifecycle logic: persona, tools,
+    # verification, drift detection, and writeback.
+    kernel = CoreLoopKernel(
+        kit=kit,
+        llm_client=core_llm,
+        state_store=effective_state_store,
+        event_sink=_EventSink(),
+        policy=policy,
+    )
+
+    # Wire cancel event: if provided, set it on the kernel so the loop
+    # checks it each iteration
+    if cancel_event is not None:
+        # We need to monitor the external cancel event and forward to kernel
+        async def _cancel_watcher():
+            await cancel_event.wait()
+            kernel.cancel()
+        watcher_task = asyncio.create_task(_cancel_watcher())
+    else:
+        watcher_task = None
+
+    # Build turn input
+    turn_input = RuntimeTurnInput(
+        user_message=goal,
+        metadata={"session_id": session_id},
+    )
+
+    # Run
+    result = await kernel.run(turn_input)
+
+    # Clean up cancel watcher
+    if watcher_task is not None and not watcher_task.done():
+        watcher_task.cancel()
+        try:
+            await watcher_task
+        except asyncio.CancelledError:
+            pass
+
+    # --- Observability: enrich KernelResult.metadata from event_log ---
+    # Collect all CoreEvents from the InMemoryEventLog (no global variables).
+    all_events = [evt for _, evt in event_log.replay_since()]
+
+    # Build core_events summary list (lightweight dicts, no full prompt/output).
+    # Streaming events are compacted to logical blocks so page refresh does not
+    # reconstruct one UI card per token/delta.
+    core_events_summary = compact_core_events_for_summary(all_events)
+    response_blocks_summary = build_response_blocks_for_summary(core_events_summary)
+
+    # Build tool_results_summary from steps
+    tool_results_summary: list[dict[str, Any]] = []
+    for step in result.steps:
+        for ts in step.tool_steps:
+            entry: dict[str, Any] = {
+                "call_id": ts.call.id,
+                "tool_name": ts.call.name,
+                "status": ts.result.status,
+            }
+            if ts.call.arguments:
+                entry["args"] = dict(ts.call.arguments)
+            exit_code = ts.result.metadata.get("exit_code")
+            if isinstance(exit_code, int):
+                entry["exit_code"] = exit_code
+            # Include tool output for display (unlimited)
+            if ts.result.content:
+                entry["content_preview"] = ts.result.content
+            if ts.result.status == "failed" and ts.result.error:
+                entry["error"] = ts.result.error[:200]
+            if ts.result.artifacts:
+                entry["artifacts"] = [artifact.to_dict() for artifact in ts.result.artifacts]
+            if ts.result.metadata:
+                entry["metadata"] = dict(ts.result.metadata)
+            tool_results_summary.append(entry)
+
+    # Build verification_summaries from steps
+    verification_summaries: list[dict[str, Any]] = []
+    for step in result.steps:
+        if step.verification is not None:
+            verification_summaries.append({
+                "passed": step.verification.passed,
+                "required": step.verification.required,
+                "summary": step.verification.summary,
+                "attempt": step.verification.attempt,
+                "max_attempts": step.verification.max_attempts,
+            })
+
+    usage_prompt_tokens = 0
+    usage_completion_tokens = 0
+    usage_total_tokens = 0
+    usage_cached_tokens = 0
+    for event in all_events:
+        payload = event.payload or {}
+        if event.name == "runtime.usage":
+            usage = payload.get("usage")
+        elif event.name == "runtime.reply_delta":
+            usage = payload.get("usage")
+        else:
+            continue
+        if not isinstance(usage, dict):
+            continue
+        prompt_tokens = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+        completion_tokens = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
+        total_tokens = int(usage.get("total_tokens") or (prompt_tokens + completion_tokens) or 0)
+        usage_prompt_tokens += prompt_tokens
+        usage_completion_tokens += completion_tokens
+        usage_total_tokens += total_tokens
+        prompt_details = usage.get("prompt_tokens_details") or usage.get("input_tokens_details") or {}
+        if isinstance(prompt_details, dict):
+            usage_cached_tokens += int(
+                prompt_details.get("cached_tokens")
+                or prompt_details.get("cache_read_input_tokens")
+                or 0
+            )
+
+    duration_ms = 0
+    if all_events:
+        duration_ms = max(0, all_events[-1].timestamp_ms - all_events[0].timestamp_ms)
+    cache_hit_rate = (
+        round(usage_cached_tokens / usage_prompt_tokens, 4)
+        if usage_prompt_tokens > 0 and usage_cached_tokens > 0
+        else None
+    )
+
+    # Enrich metadata (KernelResult.metadata is dict[str, Any])
+    result.metadata["core_events"] = core_events_summary
+    result.metadata["response_blocks"] = response_blocks_summary
+    result.metadata["steps_count"] = len(result.steps)
+    result.metadata["tool_results_summary"] = tool_results_summary
+    result.metadata["verification_summaries"] = verification_summaries
+    result.metadata["runtime_metrics"] = {
+        "duration_ms": duration_ms,
+        "input_tokens": usage_prompt_tokens,
+        "output_tokens": usage_completion_tokens,
+        "total_tokens": usage_total_tokens,
+        "cache_hit_rate": cache_hit_rate,
+        "llm_calls": len(result.steps),
+    }
+    if result.decision:
+        result.metadata["decision"] = result.decision
+    if result.error:
+        result.metadata["error"] = result.error
+
+    return result
+
+

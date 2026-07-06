@@ -1,0 +1,376 @@
+{
+  "models": {
+    "AppendEventInput": {
+      "properties": {
+        "client_message_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Client Message Id"
+        },
+        "event_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Event Id"
+        },
+        "item_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Item Id"
+        },
+        "method": {
+          "title": "Method",
+          "type": "string"
+        },
+        "parent_item_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Item Id"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "title": "Payload",
+          "type": "object"
+        },
+        "thread_id": {
+          "title": "Thread Id",
+          "type": "string"
+        },
+        "turn_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Turn Id"
+        }
+      },
+      "required": [
+        "thread_id",
+        "method"
+      ],
+      "title": "AppendEventInput",
+      "type": "object"
+    },
+    "InitializeParams": {
+      "$defs": {
+        "ClientInfo": {
+          "properties": {
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "title": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Title"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Version"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "ClientInfo",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "capabilities": {
+          "additionalProperties": true,
+          "title": "Capabilities",
+          "type": "object"
+        },
+        "clientInfo": {
+          "$ref": "#/$defs/ClientInfo"
+        },
+        "lastSeenSeq": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lastseenseq"
+        },
+        "threadId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Threadid"
+        }
+      },
+      "required": [
+        "clientInfo"
+      ],
+      "title": "InitializeParams",
+      "type": "object"
+    },
+    "JsonRpcRequest": {
+      "properties": {
+        "id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Id"
+        },
+        "method": {
+          "title": "Method",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": true,
+          "title": "Params",
+          "type": "object"
+        }
+      },
+      "required": [
+        "method"
+      ],
+      "title": "JsonRpcRequest",
+      "type": "object"
+    },
+    "JsonRpcResponse": {
+      "$defs": {
+        "JsonRpcError": {
+          "properties": {
+            "code": {
+              "title": "Code",
+              "type": "integer"
+            },
+            "data": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Data"
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "title": "JsonRpcError",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JsonRpcError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Id"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Result"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "JsonRpcResponse",
+      "type": "object"
+    },
+    "WriterAppEventEnvelope": {
+      "properties": {
+        "client_message_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Client Message Id"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "event_id": {
+          "title": "Event Id",
+          "type": "string"
+        },
+        "item_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Item Id"
+        },
+        "method": {
+          "title": "Method",
+          "type": "string"
+        },
+        "parent_item_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Item Id"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "title": "Payload",
+          "type": "object"
+        },
+        "protocol_version": {
+          "const": "writer.app_server.v1",
+          "default": "writer.app_server.v1",
+          "title": "Protocol Version",
+          "type": "string"
+        },
+        "seq": {
+          "title": "Seq",
+          "type": "integer"
+        },
+        "thread_id": {
+          "title": "Thread Id",
+          "type": "string"
+        },
+        "turn_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Turn Id"
+        }
+      },
+      "required": [
+        "event_id",
+        "seq",
+        "thread_id",
+        "method",
+        "payload",
+        "created_at"
+      ],
+      "title": "WriterAppEventEnvelope",
+      "type": "object"
+    }
+  },
+  "schema_version": "writer.app_server.schema.v1",
+  "source": "members/writer/backend/app/app_server/protocol.py"
+}

@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2021",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "jsx": "preserve",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "lib": ["ES2021", "DOM", "DOM.Iterable"],
+    "skipLibCheck": true,
+    "noEmit": true,
+    "paths": {
+      "@/*": ["./src/*"],
+      "@lamtools/ui": ["../../../core/ui/src/index.ts"]
+    },
+    "types": ["vite/client"]
+  },
+  "include": [
+    "src/**/*.ts", "src/**/*.tsx", "src/**/*.vue",
+    "../../../core/ui/src/**/*.ts", "../../../core/ui/src/**/*.vue"
+  ]
+}

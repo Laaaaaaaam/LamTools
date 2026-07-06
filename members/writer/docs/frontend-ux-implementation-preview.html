@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LamWriter UI 落地预览</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #121313;
+      --panel: #262625;
+      --panel-2: #1d1e1e;
+      --panel-3: #30302f;
+      --line: #3b3a38;
+      --text: #f2efeb;
+      --muted: #a7a29b;
+      --faint: #726e68;
+      --green: #32d17d;
+      --blue: #79bcff;
+      --orange: #ff9142;
+      --red: #f5555d;
+      --purple: #bd8cff;
+      --radius: 12px;
+      --radius-lg: 18px;
+      --font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 14px;
+    }
+    .shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 390px;
+      gap: 18px;
+      padding: 30px;
+    }
+    .main {
+      min-width: 0;
+      border-radius: 22px;
+      background: #171818;
+      padding: 28px 36px 120px;
+      overflow: hidden;
+    }
+    .thread {
+      width: min(900px, 100%);
+      margin: 0 auto;
+      display: grid;
+      gap: 18px;
+    }
+    .thread-header {
+      min-height: 54px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 10px;
+    }
+    .thread-header h1 {
+      margin: 0 0 5px;
+      font-size: 21px;
+      font-weight: 720;
+      letter-spacing: 0;
+    }
+    .meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      color: var(--faint);
+      font-size: 13px;
+    }
+    .run-status { color: #cfc8bc; }
+    .user-row {
+      display: flex;
+      justify-content: flex-end;
+    }
+    .user-bubble {
+      max-width: min(680px, 82%);
+      border-radius: 22px;
+      background: #2b2b2a;
+      padding: 14px 18px;
+      font-size: 18px;
+      line-height: 1.5;
+    }
+    .writer-output {
+      max-width: 760px;
+      margin: 4px 0 2px 26px;
+      color: #d8d3cc;
+      font-size: 15px;
+      line-height: 1.65;
+    }
+    .writer-output strong { color: #f0ece6; }
+    .process-card {
+      margin: -4px 0 2px;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      overflow: visible;
+    }
+    .step-head {
+      min-height: 30px;
+      padding: 2px 6px;
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr) 18px;
+      gap: 8px;
+      align-items: center;
+      background: transparent;
+      border-radius: 8px;
+      color: #c8c3bc;
+    }
+    .step-head:hover { background: rgba(255,255,255,.045); }
+    .done-mark {
+      width: 15px;
+      height: 15px;
+      border-radius: 50%;
+      border: 1px solid #4c6857;
+      color: #7d9687;
+      display: grid;
+      place-items: center;
+      font-size: 9px;
+      font-weight: 800;
+    }
+    .is-running .done-mark {
+      color: #b9a96b;
+      border-color: #7b6b39;
+    }
+    .is-failed .done-mark {
+      color: #d67878;
+      border-color: #914d4d;
+    }
+    .step-title {
+      color: #cfcac3;
+      font-size: 15px;
+      font-weight: 720;
+      line-height: 1.3;
+    }
+    .step-sub {
+      margin-left: 8px;
+      color: #77716a;
+      font-size: 14px;
+    }
+    .chevron {
+      width: 18px;
+      height: 18px;
+      border-radius: 5px;
+      opacity: .45;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+    }
+    .processed-row {
+      width: max-content;
+      margin: 4px 0 10px 26px;
+      padding: 5px 0;
+      border: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      background: transparent;
+      color: #8d8983;
+      font-size: 15px;
+    }
+    .agent-card {
+      margin: 2px 0 8px 26px;
+      width: min(760px, calc(100% - 26px));
+      border: 1px solid rgba(255,255,255,.10);
+      border-radius: 14px;
+      background: #1c1d1d;
+      overflow: hidden;
+    }
+    .agent-head {
+      min-height: 48px;
+      padding: 12px 14px;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+    }
+    .agent-head strong {
+      font-size: 15px;
+      font-weight: 720;
+      color: #e8e2d8;
+    }
+    .agent-head span {
+      color: #c7b9d9;
+      font-size: 13px;
+    }
+    .agent-grid {
+      display: grid;
+      grid-template-columns: 96px minmax(0, 1fr);
+    }
+    .agent-grid div {
+      padding: 9px 14px;
+      border-bottom: 1px solid rgba(255,255,255,.055);
+      color: #bdb7ae;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .agent-grid div:nth-child(odd) {
+      color: var(--faint);
+      background: rgba(255,255,255,.025);
+    }
+    .agent-grid div:nth-last-child(-n+2) { border-bottom: 0; }
+    .decision-card {
+      width: min(760px, 100%);
+      margin: 8px 0 16px 26px;
+      border-radius: 16px;
+      border: 1px solid rgba(255,255,255,.10);
+      background: rgba(255,255,255,.045);
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+    }
+    .decision-card.blocking {
+      border-color: rgba(255,255,255,.11);
+      box-shadow: inset 2px 0 0 rgba(245,85,93,.55);
+    }
+    .decision-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: start;
+      gap: 14px;
+    }
+    .decision-card strong { font-size: 14px; }
+    .decision-reason {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .badge {
+      border-radius: 999px;
+      padding: 3px 8px;
+      background: rgba(255,255,255,.07);
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .badge.blocking {
+      color: #d9b0b1;
+      background: rgba(245,85,93,.08);
+    }
+    .decision-options {
+      display: grid;
+      gap: 2px;
+    }
+    .decision-option {
+      width: 100%;
+      text-align: left;
+      border: 0;
+      border-radius: 8px;
+      padding: 8px 10px;
+      background: transparent;
+      color: var(--text);
+      display: grid;
+      gap: 4px;
+    }
+    .decision-option:hover {
+      background: rgba(255,255,255,.045);
+    }
+    .decision-option small {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .change-review-card {
+      margin: 18px 0 28px;
+      border: 1px solid rgba(255,255,255,.11);
+      border-radius: 14px;
+      background: #1c1c1b;
+      overflow: hidden;
+    }
+    .change-review-head {
+      min-height: 78px;
+      padding: 14px 18px;
+      display: grid;
+      grid-template-columns: 48px minmax(0, 1fr) auto auto;
+      gap: 14px;
+      align-items: center;
+    }
+    .change-icon {
+      width: 42px;
+      height: 42px;
+      border-radius: 12px;
+      background: #111;
+      color: #c8c4bd;
+      display: grid;
+      place-items: center;
+      font-size: 21px;
+    }
+    .change-review-head strong {
+      display: block;
+      font-size: 17px;
+    }
+    .change-review-head span {
+      display: block;
+      margin-top: 4px;
+      color: var(--green);
+      font-size: 13px;
+    }
+    .write-record span { color: var(--muted); }
+    .review-undo,
+    .review-btn {
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 10px;
+      padding: 8px 12px;
+      background: rgba(255,255,255,.04);
+      color: #eee8df;
+      font-size: 14px;
+    }
+    .review-undo {
+      border-color: transparent;
+      background: transparent;
+      color: #bdb8b1;
+    }
+    .right {
+      min-width: 0;
+      border-radius: 22px;
+      background: #242423;
+      padding: 16px;
+      display: grid;
+      align-content: start;
+      gap: 14px;
+    }
+    .drawer-head {
+      min-height: 38px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .drawer-head strong { font-size: 15px; }
+    .side-section {
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 15px;
+      background: rgba(255,255,255,.035);
+      padding: 12px;
+    }
+    .side-section h3 {
+      margin: 0 0 10px;
+      color: #e8e3dc;
+      font-size: 13px;
+      font-weight: 720;
+    }
+    .progress-row {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      min-height: 24px;
+      color: var(--faint);
+      font-size: 13px;
+    }
+    .progress-row.current {
+      color: var(--text);
+      font-weight: 720;
+    }
+    .node {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      border: 1px solid var(--line);
+    }
+    .current .node {
+      border-color: var(--green);
+      background: var(--green);
+      box-shadow: 0 0 0 3px rgba(50,209,125,.12);
+    }
+    .activity-item {
+      min-height: 30px;
+      display: grid;
+      grid-template-columns: 92px minmax(0, 1fr);
+      gap: 8px;
+      align-items: center;
+      border-bottom: 1px solid rgba(255,255,255,.06);
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .activity-item:last-child { border-bottom: 0; }
+    .activity-kind { color: var(--faint); }
+    .activity-text { color: #d5d0ca; }
+    .activity-text.warn { color: #d8c68f; }
+    .floating-composer {
+      position: fixed;
+      left: calc((100vw - 390px) / 2);
+      bottom: 22px;
+      width: min(900px, calc(100vw - 470px));
+      transform: translateX(-50%);
+      border: 1px solid #44423f;
+      border-radius: 24px;
+      background: #2c2c2b;
+      box-shadow: 0 24px 90px rgba(0,0,0,.5);
+      overflow: hidden;
+    }
+    .floating-composer textarea {
+      width: 100%;
+      min-height: 54px;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--text);
+      padding: 18px 20px 10px;
+      font-size: 17px;
+      resize: none;
+    }
+    .composer-bottom {
+      padding: 10px 14px 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .composer-pill,
+    .send {
+      height: 38px;
+      border: 0;
+      border-radius: 11px;
+      background: #3a3937;
+      color: #e6e1db;
+      padding: 0 12px;
+      font-weight: 650;
+    }
+    .send {
+      width: 38px;
+      border-radius: 50%;
+      background: #dedbd4;
+      color: #171717;
+      padding: 0;
+    }
+    @media (max-width: 980px) {
+      .shell { grid-template-columns: 1fr; padding: 18px; }
+      .right { display: none; }
+      .floating-composer { left: 50%; width: calc(100vw - 44px); }
+      .main { padding-inline: 18px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <main class="main">
+      <section class="thread">
+        <header class="thread-header">
+          <div>
+            <h1>开发本地视频剪辑软件</h1>
+            <div class="meta-row">
+              <span>#5ac4740a</span>
+              <span>实现</span>
+              <span class="run-status">仍在等待模型返回</span>
+            </div>
+          </div>
+        </header>
+
+        <div class="user-row">
+          <div class="user-bubble">开发一个本地视频剪辑软件</div>
+        </div>
+
+        <div class="writer-output">
+          <strong>我会先确定本地桌面路线，然后实现可运行的最小版本。</strong>
+        </div>
+
+        <button class="processed-row" type="button">
+          <span>已处理 8 个上下文动作</span><span>›</span>
+        </button>
+
+        <article class="agent-card">
+          <header class="agent-head">
+            <strong>设计完成</strong>
+            <span>选中方案：Electron + 本地 FFmpeg</span>
+          </header>
+          <div class="agent-grid">
+            <div>意图分析</div><div>用户要本地视频剪辑软件，优先桌面应用体验。</div>
+            <div>候选方案</div><div>MVP / 平衡 / 工程化 3 个候选。</div>
+            <div>修订</div><div>去除不必要重架构，保留可落地路线。</div>
+            <div>决策</div><div>选择桌面壳 + 本地转码能力。</div>
+          </div>
+        </article>
+
+        <article class="process-card is-running">
+          <div class="step-head">
+            <span class="done-mark">•</span>
+            <div><span class="step-title">正在修改 timeline.py</span><span class="step-sub">实现 · 已等待 7m 42s</span></div>
+            <span class="chevron">›</span>
+          </div>
+        </article>
+
+        <article class="process-card">
+          <div class="step-head">
+            <span class="done-mark">✓</span>
+            <div><span class="step-title">验证浏览器页面</span><span class="step-sub">已完成 · 刚刚</span></div>
+            <span class="chevron">›</span>
+          </div>
+        </article>
+
+        <article class="decision-card blocking">
+          <div class="decision-top">
+            <div>
+              <strong>阻塞决策：是否允许引入 FFmpeg 依赖</strong>
+              <div class="decision-reason">原因：不同选择会影响打包体积、许可证和最终安装方式。</div>
+            </div>
+            <span class="badge blocking">暂停中</span>
+          </div>
+          <div class="decision-options">
+            <button class="decision-option"><span>继续当前方案</span><small>使用本地 FFmpeg，优先完整剪辑能力。</small></button>
+            <button class="decision-option"><span>改为纯前端预览</span><small>功能较弱，但交付更轻。</small></button>
+          </div>
+        </article>
+
+        <article class="change-review-card">
+          <div class="change-review-head">
+            <div class="change-icon">⊞</div>
+            <div>
+              <strong>审核改动</strong>
+              <span>来自当前 Git diff，包含未跟踪文件 · +428 -12</span>
+            </div>
+            <button class="review-undo">撤销 ↶</button>
+            <button class="review-btn">查看 diff</button>
+          </div>
+        </article>
+
+        <article class="change-review-card write-record">
+          <div class="change-review-head">
+            <div class="change-icon">≡</div>
+            <div>
+              <strong>写入记录</strong>
+              <span>没有真实 Git diff，仅显示 Writer 写入过的路径</span>
+            </div>
+            <button class="review-btn">查看记录</button>
+          </div>
+        </article>
+      </section>
+    </main>
+
+    <aside class="right">
+      <header class="drawer-head">
+        <strong>运行状态</strong>
+        <span class="badge">固定</span>
+      </header>
+
+      <section class="side-section">
+        <h3>Progress</h3>
+        <div class="progress-row"><span class="node"></span><span>设计完成</span><span>1/5</span></div>
+        <div class="progress-row"><span class="node"></span><span>计划完成</span><span>2/5</span></div>
+        <div class="progress-row current"><span class="node"></span><span>实现：修改 timeline.py</span><span>3/5</span></div>
+        <div class="progress-row"><span class="node"></span><span>下一步：运行验证</span><span>4/5</span></div>
+        <div class="progress-row"><span class="node"></span><span>提交 checkpoint</span><span>5/5</span></div>
+      </section>
+
+      <section class="side-section">
+        <h3>Status</h3>
+        <div class="activity-item"><span class="activity-kind">流状态</span><span class="activity-text">运行中</span></div>
+        <div class="activity-item"><span class="activity-kind">运行时长</span><span class="activity-text">18m 04s</span></div>
+        <div class="activity-item"><span class="activity-kind">最近事件</span><span class="activity-text">42 秒前</span></div>
+        <div class="activity-item"><span class="activity-kind">模型等待</span><span class="activity-text warn">7m 42s，进程仍活跃</span></div>
+        <div class="activity-item"><span class="activity-kind">Git</span><span class="activity-text">暂无 Git 状态</span></div>
+      </section>
+    </aside>
+  </div>
+
+  <form class="floating-composer">
+    <textarea placeholder="要求后续变更"></textarea>
+    <div class="composer-bottom">
+      <div>
+        <button type="button" class="composer-pill">glm5.1</button>
+        <button type="button" class="composer-pill">medium</button>
+      </div>
+      <button type="button" class="send">↑</button>
+    </div>
+  </form>
+</body>
+</html>

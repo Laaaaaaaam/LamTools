@@ -1,0 +1,1102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>网页计数器</title>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Noto+Sans+SC:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <style>
+        :root {
+            --bg-primary: #0f0f1a;
+            --bg-secondary: #1a1a2e;
+            --bg-card: #16213e;
+            --accent: #e94560;
+            --accent-glow: rgba(233, 69, 96, 0.4);
+            --accent-secondary: #0f3460;
+            --text-primary: #eaeaea;
+            --text-secondary: #a0a0b0;
+            --success: #4ecca3;
+            --warning: #ffc947;
+            --danger: #e94560;
+            --info: #4fc3f7;
+            --border: rgba(255,255,255,0.08);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Noto Sans SC', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* 背景动画 */
+        .bg-animation {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            z-index: 0;
+            overflow: hidden;
+        }
+
+        .bg-animation .circle {
+            position: absolute;
+            border-radius: 50%;
+            background: radial-gradient(circle, var(--accent-glow), transparent 70%);
+            animation: float 8s ease-in-out infinite;
+            opacity: 0.3;
+        }
+
+        .bg-animation .circle:nth-child(1) {
+            width: 300px; height: 300px;
+            top: -50px; left: -50px;
+            animation-delay: 0s;
+        }
+        .bg-animation .circle:nth-child(2) {
+            width: 400px; height: 400px;
+            bottom: -100px; right: -100px;
+            animation-delay: 2s;
+            background: radial-gradient(circle, rgba(15, 52, 96, 0.5), transparent 70%);
+        }
+        .bg-animation .circle:nth-child(3) {
+            width: 200px; height: 200px;
+            top: 50%; left: 50%;
+            animation-delay: 4s;
+            background: radial-gradient(circle, rgba(78, 204, 163, 0.3), transparent 70%);
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            33% { transform: translate(30px, -30px) scale(1.05); }
+            66% { transform: translate(-20px, 20px) scale(0.95); }
+        }
+
+        /* 主容器 */
+        .container {
+            position: relative;
+            z-index: 1;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+
+        /* 头部 */
+        header {
+            text-align: center;
+            margin-bottom: 50px;
+        }
+
+        header h1 {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 2.8rem;
+            font-weight: 900;
+            background: linear-gradient(135deg, var(--accent), var(--warning), var(--success));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 10px;
+            letter-spacing: 3px;
+        }
+
+        header p {
+            color: var(--text-secondary);
+            font-size: 1rem;
+            font-weight: 300;
+        }
+
+        /* 主计数器 */
+        .main-counter {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 50px 30px;
+            text-align: center;
+            margin-bottom: 30px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .main-counter::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 3px;
+            background: linear-gradient(90deg, var(--accent), var(--warning), var(--success), var(--info));
+        }
+
+        .counter-label {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            margin-bottom: 15px;
+        }
+
+        .counter-display {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 7rem;
+            font-weight: 900;
+            color: var(--text-primary);
+            line-height: 1;
+            margin-bottom: 30px;
+            transition: transform 0.15s ease, color 0.3s ease;
+            user-select: none;
+            text-shadow: 0 0 40px var(--accent-glow);
+        }
+
+        .counter-display.bump-up {
+            transform: scale(1.08);
+            color: var(--success);
+        }
+
+        .counter-display.bump-down {
+            transform: scale(1.08);
+            color: var(--danger);
+        }
+
+        .counter-display.bump-reset {
+            transform: scale(1.15);
+            color: var(--warning);
+        }
+
+        /* 步长选择 */
+        .step-selector {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            margin-bottom: 35px;
+        }
+
+        .step-selector span {
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+        }
+
+        .step-btn {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            padding: 6px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: all 0.3s ease;
+            font-family: 'Orbitron', sans-serif;
+        }
+
+        .step-btn:hover {
+            border-color: var(--accent);
+            color: var(--text-primary);
+        }
+
+        .step-btn.active {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: white;
+            box-shadow: 0 0 15px var(--accent-glow);
+        }
+
+        /* 按钮组 */
+        .btn-group {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 16px 36px;
+            border: none;
+            border-radius: 16px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-family: 'Noto Sans SC', sans-serif;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn::after {
+            content: '';
+            position: absolute;
+            top: 50%; left: 50%;
+            width: 0; height: 0;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.15);
+            transition: width 0.4s ease, height 0.4s ease;
+            transform: translate(-50%, -50%);
+        }
+
+        .btn:active::after {
+            width: 300px;
+            height: 300px;
+        }
+
+        .btn-increment {
+            background: linear-gradient(135deg, #4ecca3, #38b28a);
+            color: white;
+            box-shadow: 0 4px 20px rgba(78, 204, 163, 0.3);
+        }
+        .btn-increment:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 25px rgba(78, 204, 163, 0.5);
+        }
+
+        .btn-decrement {
+            background: linear-gradient(135deg, #e94560, #c23152);
+            color: white;
+            box-shadow: 0 4px 20px rgba(233, 69, 96, 0.3);
+        }
+        .btn-decrement:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 25px rgba(233, 69, 96, 0.5);
+        }
+
+        .btn-reset {
+            background: var(--bg-secondary);
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+        }
+        .btn-reset:hover {
+            background: var(--accent-secondary);
+            color: var(--text-primary);
+            transform: translateY(-2px);
+        }
+
+        /* 统计面板 */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 16px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 24px 20px;
+            text-align: center;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 30px rgba(0,0,0,0.3);
+        }
+
+        .stat-card .stat-icon {
+            font-size: 1.5rem;
+            margin-bottom: 10px;
+        }
+
+        .stat-card .stat-value {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1.8rem;
+            font-weight: 700;
+            margin-bottom: 5px;
+        }
+
+        .stat-card .stat-label {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .stat-card.total-inc .stat-icon { color: var(--success); }
+        .stat-card.total-dec .stat-icon { color: var(--danger); }
+        .stat-card.total-ops .stat-icon { color: var(--info); }
+        .stat-card.max-val .stat-icon { color: var(--warning); }
+        .stat-card.min-val .stat-icon { color: #a78bfa; }
+        .stat-card.avg-val .stat-icon { color: #f472b6; }
+
+        /* 历史记录 */
+        .history-section {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 30px;
+            margin-bottom: 30px;
+        }
+
+        .history-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .history-header h2 {
+            font-size: 1.2rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .history-header h2 i {
+            color: var(--accent);
+        }
+
+        .clear-history-btn {
+            background: none;
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            padding: 6px 14px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            transition: all 0.3s ease;
+        }
+
+        .clear-history-btn:hover {
+            border-color: var(--danger);
+            color: var(--danger);
+        }
+
+        .history-list {
+            max-height: 280px;
+            overflow-y: auto;
+            padding-right: 10px;
+        }
+
+        .history-list::-webkit-scrollbar {
+            width: 4px;
+        }
+        .history-list::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .history-list::-webkit-scrollbar-thumb {
+            background: var(--accent-secondary);
+            border-radius: 4px;
+        }
+
+        .history-item {
+            display: flex;
+            align-items: center;
+            padding: 12px 16px;
+            border-radius: 12px;
+            margin-bottom: 8px;
+            background: var(--bg-secondary);
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateX(-20px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        .history-item .h-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.9rem;
+            margin-right: 14px;
+            flex-shrink: 0;
+        }
+
+        .history-item.inc .h-icon {
+            background: rgba(78, 204, 163, 0.15);
+            color: var(--success);
+        }
+
+        .history-item.dec .h-icon {
+            background: rgba(233, 69, 96, 0.15);
+            color: var(--danger);
+        }
+
+        .history-item.rst .h-icon {
+            background: rgba(255, 201, 71, 0.15);
+            color: var(--warning);
+        }
+
+        .history-item .h-detail {
+            flex: 1;
+        }
+
+        .history-item .h-detail .h-action {
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+
+        .history-item .h-detail .h-change {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            margin-top: 2px;
+        }
+
+        .history-item .h-result {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .history-item .h-time {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-left: 12px;
+            white-space: nowrap;
+        }
+
+        .empty-history {
+            text-align: center;
+            color: var(--text-secondary);
+            padding: 30px;
+            font-size: 0.9rem;
+        }
+
+        .empty-history i {
+            display: block;
+            font-size: 2rem;
+            margin-bottom: 10px;
+            opacity: 0.3;
+        }
+
+        /* 快捷键提示 */
+        .shortcuts {
+            text-align: center;
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+            padding: 20px;
+        }
+
+        .shortcuts kbd {
+            display: inline-block;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 2px 8px;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 0.75rem;
+            margin: 0 2px;
+        }
+
+        /* Toast 通知 */
+        .toast-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 999;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .toast {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 14px 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 0.9rem;
+            animation: toastIn 0.4s ease;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+            min-width: 250px;
+        }
+
+        .toast.toast-out {
+            animation: toastOut 0.3s ease forwards;
+        }
+
+        @keyframes toastIn {
+            from { opacity: 0; transform: translateX(50px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        @keyframes toastOut {
+            from { opacity: 1; transform: translateX(0); }
+            to { opacity: 0; transform: translateX(50px); }
+        }
+
+        /* 进度条 - 目标功能 */
+        .goal-section {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 30px;
+            margin-bottom: 30px;
+        }
+
+        .goal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .goal-header h2 {
+            font-size: 1.2rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .goal-header h2 i {
+            color: var(--warning);
+        }
+
+        .goal-input-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .goal-input-group input {
+            flex: 1;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 12px 16px;
+            color: var(--text-primary);
+            font-size: 1rem;
+            font-family: 'Orbitron', sans-serif;
+            outline: none;
+            transition: border-color 0.3s ease;
+        }
+
+        .goal-input-group input:focus {
+            border-color: var(--accent);
+        }
+
+        .goal-input-group input::placeholder {
+            color: var(--text-secondary);
+            font-family: 'Noto Sans SC', sans-serif;
+            font-size: 0.85rem;
+        }
+
+        .goal-set-btn {
+            background: linear-gradient(135deg, var(--accent-secondary), #1a3a6e);
+            border: none;
+            border-radius: 12px;
+            color: white;
+            padding: 12px 24px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+
+        .goal-set-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(15, 52, 96, 0.5);
+        }
+
+        .goal-progress-bar {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            height: 24px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+
+        .goal-progress-fill {
+            height: 100%;
+            border-radius: 12px;
+            background: linear-gradient(90deg, var(--accent), var(--warning));
+            transition: width 0.5s ease;
+            position: relative;
+            min-width: 0;
+        }
+
+        .goal-progress-fill.achieved {
+            background: linear-gradient(90deg, var(--success), #38b28a);
+        }
+
+        .goal-info {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .goal-info .achieved-text {
+            color: var(--success);
+            font-weight: 600;
+        }
+
+        /* 响应式 */
+        @media (max-width: 600px) {
+            header h1 {
+                font-size: 1.8rem;
+            }
+            .counter-display {
+                font-size: 4.5rem;
+            }
+            .btn {
+                padding: 14px 24px;
+                font-size: 1rem;
+            }
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+    </style>
+</head>
+<body>
+
+<!-- 背景动画 -->
+<div class="bg-animation">
+    <div class="circle"></div>
+    <div class="circle"></div>
+    <div class="circle"></div>
+</div>
+
+<!-- Toast 容器 -->
+<div class="toast-container" id="toastContainer"></div>
+
+<div class="container">
+    <!-- 头部 -->
+    <header>
+        <h1>COUNTER</h1>
+        <p>精美网页计数器 · 数据自动保存</p>
+    </header>
+
+    <!-- 主计数器 -->
+    <div class="main-counter">
+        <div class="counter-label">当前计数</div>
+        <div class="counter-display" id="counterDisplay">0</div>
+
+        <!-- 步长选择 -->
+        <div class="step-selector">
+            <span>步长：</span>
+            <button class="step-btn active" data-step="1">1</button>
+            <button class="step-btn" data-step="5">5</button>
+            <button class="step-btn" data-step="10">10</button>
+            <button class="step-btn" data-step="50">50</button>
+            <button class="step-btn" data-step="100">100</button>
+        </div>
+
+        <!-- 操作按钮 -->
+        <div class="btn-group">
+            <button class="btn btn-decrement" id="btnDecrement">
+                <i class="fas fa-minus"></i> 减少
+            </button>
+            <button class="btn btn-reset" id="btnReset">
+                <i class="fas fa-rotate-left"></i> 重置
+            </button>
+            <button class="btn btn-increment" id="btnIncrement">
+                <i class="fas fa-plus"></i> 增加
+            </button>
+        </div>
+    </div>
+
+    <!-- 目标进度 -->
+    <div class="goal-section">
+        <div class="goal-header">
+            <h2><i class="fas fa-bullseye"></i> 目标进度</h2>
+        </div>
+        <div class="goal-input-group">
+            <input type="number" id="goalInput" placeholder="输入目标数值...">
+            <button class="goal-set-btn" id="btnSetGoal">设定目标</button>
+        </div>
+        <div class="goal-progress-bar">
+            <div class="goal-progress-fill" id="goalFill" style="width: 0%"></div>
+        </div>
+        <div class="goal-info">
+            <span id="goalStatus">未设定目标</span>
+            <span id="goalPercent"></span>
+        </div>
+    </div>
+
+    <!-- 统计面板 -->
+    <div class="stats-grid">
+        <div class="stat-card total-inc">
+            <div class="stat-icon"><i class="fas fa-arrow-up"></i></div>
+            <div class="stat-value" id="statInc">0</div>
+            <div class="stat-label">增加次数</div>
+        </div>
+        <div class="stat-card total-dec">
+            <div class="stat-icon"><i class="fas fa-arrow-down"></i></div>
+            <div class="stat-value" id="statDec">0</div>
+            <div class="stat-label">减少次数</div>
+        </div>
+        <div class="stat-card total-ops">
+            <div class="stat-icon"><i class="fas fa-calculator"></i></div>
+            <div class="stat-value" id="statOps">0</div>
+            <div class="stat-label">总操作数</div>
+        </div>
+        <div class="stat-card max-val">
+            <div class="stat-icon"><i class="fas fa-crown"></i></div>
+            <div class="stat-value" id="statMax">0</div>
+            <div class="stat-label">最大值</div>
+        </div>
+        <div class="stat-card min-val">
+            <div class="stat-icon"><i class="fas fa-gem"></i></div>
+            <div class="stat-value" id="statMin">0</div>
+            <div class="stat-label">最小值</div>
+        </div>
+        <div class="stat-card avg-val">
+            <div class="stat-icon"><i class="fas fa-chart-line"></i></div>
+            <div class="stat-value" id="statAvg">0</div>
+            <div class="stat-label">平均值</div>
+        </div>
+    </div>
+
+    <!-- 历史记录 -->
+    <div class="history-section">
+        <div class="history-header">
+            <h2><i class="fas fa-clock-rotate-left"></i> 操作历史</h2>
+            <button class="clear-history-btn" id="btnClearHistory">
+                <i class="fas fa-trash"></i> 清空
+            </button>
+        </div>
+        <div class="history-list" id="historyList">
+            <div class="empty-history">
+                <i class="fas fa-inbox"></i>
+                暂无操作记录
+            </div>
+        </div>
+    </div>
+
+    <!-- 快捷键提示 -->
+    <div class="shortcuts">
+        <kbd>↑</kbd> 增加 &nbsp;&nbsp;
+        <kbd>↓</kbd> 减少 &nbsp;&nbsp;
+        <kbd>R</kbd> 重置 &nbsp;&nbsp;
+        <kbd>1-5</kbd> 切换步长
+    </div>
+</div>
+
+<script>
+    // ==================== 状态管理 ====================
+    const STATE_KEY = 'web_counter_state';
+
+    let state = loadState();
+
+    function defaultState() {
+        return {
+            count: 0,
+            step: 1,
+            totalInc: 0,
+            totalDec: 0,
+            maxVal: 0,
+            minVal: 0,
+            goalValue: null,
+            history: []
+        };
+    }
+
+    function loadState() {
+        try {
+            const saved = localStorage.getItem(STATE_KEY);
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                return { ...defaultState(), ...parsed };
+            }
+        } catch (e) { }
+        return defaultState();
+    }
+
+    function saveState() {
+        try {
+            localStorage.setItem(STATE_KEY, JSON.stringify(state));
+        } catch (e) { }
+    }
+
+    // ==================== DOM 引用 ====================
+    const counterDisplay = document.getElementById('counterDisplay');
+    const btnIncrement = document.getElementById('btnIncrement');
+    const btnDecrement = document.getElementById('btnDecrement');
+    const btnReset = document.getElementById('btnReset');
+    const historyList = document.getElementById('historyList');
+    const btnClearHistory = document.getElementById('btnClearHistory');
+    const goalInput = document.getElementById('goalInput');
+    const btnSetGoal = document.getElementById('btnSetGoal');
+    const goalFill = document.getElementById('goalFill');
+    const goalStatus = document.getElementById('goalStatus');
+    const goalPercent = document.getElementById('goalPercent');
+
+    // ==================== 核心逻辑 ====================
+    function increment() {
+        const oldVal = state.count;
+        state.count += state.step;
+        state.totalInc++;
+        updateMinMax();
+        addHistory('inc', state.step, oldVal, state.count);
+        animateCounter('bump-up');
+        updateUI();
+        saveState();
+        checkGoal();
+    }
+
+    function decrement() {
+        const oldVal = state.count;
+        state.count -= state.step;
+        state.totalDec++;
+        updateMinMax();
+        addHistory('dec', state.step, oldVal, state.count);
+        animateCounter('bump-down');
+        updateUI();
+        saveState();
+    }
+
+    function reset() {
+        if (state.count === 0 && state.totalInc === 0 && state.totalDec === 0) return;
+        const oldVal = state.count;
+        state.count = 0;
+        state.totalInc = 0;
+        state.totalDec = 0;
+        state.maxVal = 0;
+        state.minVal = 0;
+        addHistory('rst', 0, oldVal, 0);
+        animateCounter('bump-reset');
+        showToast('计数器已重置', 'fas fa-rotate-left', 'var(--warning)');
+        updateUI();
+        saveState();
+        updateGoal();
+    }
+
+    function updateMinMax() {
+        if (state.count > state.maxVal) state.maxVal = state.count;
+        if (state.count < state.minVal) state.minVal = state.count;
+    }
+
+    function addHistory(type, step, from, to) {
+        const now = new Date();
+        const timeStr = now.getHours().toString().padStart(2, '0') + ':' +
+                        now.getMinutes().toString().padStart(2, '0') + ':' +
+                        now.getSeconds().toString().padStart(2, '0');
+
+        state.history.unshift({ type, step, from, to, time: timeStr });
+        if (state.history.length > 100) state.history.pop();
+    }
+
+    // ==================== 动画 ====================
+    function animateCounter(className) {
+        counterDisplay.classList.remove('bump-up', 'bump-down', 'bump-reset');
+        void counterDisplay.offsetWidth; // 触发 reflow
+        counterDisplay.classList.add(className);
+        setTimeout(() => counterDisplay.classList.remove(className), 200);
+    }
+
+    // ==================== UI 更新 ====================
+    function updateUI() {
+        // 计数显示
+        counterDisplay.textContent = state.count;
+
+        // 统计
+        document.getElementById('statInc').textContent = state.totalInc;
+        document.getElementById('statDec').textContent = state.totalDec;
+        document.getElementById('statOps').textContent = state.totalInc + state.totalDec;
+        document.getElementById('statMax').textContent = state.maxVal;
+        document.getElementById('statMin').textContent = state.minVal;
+
+        const totalOps = state.totalInc + state.totalDec;
+        const avg = totalOps > 0 ? (state.count / totalOps).toFixed(1) : '0';
+        document.getElementById('statAvg').textContent = avg;
+
+        // 历史记录
+        renderHistory();
+        // 目标进度
+        updateGoal();
+    }
+
+    function renderHistory() {
+        if (state.history.length === 0) {
+            historyList.innerHTML = `
+                <div class="empty-history">
+                    <i class="fas fa-inbox"></i>
+                    暂无操作记录
+                </div>`;
+            return;
+        }
+
+        historyList.innerHTML = state.history.slice(0, 50).map(item => {
+            let icon, action, change;
+            if (item.type === 'inc') {
+                icon = 'fa-plus';
+                action = '增加';
+                change = `${item.from} → ${item.to} (+${item.step})`;
+            } else if (item.type === 'dec') {
+                icon = 'fa-minus';
+                action = '减少';
+                change = `${item.from} → ${item.to} (-${item.step})`;
+            } else {
+                icon = 'fa-rotate-left';
+                action = '重置';
+                change = `${item.from} → 0`;
+            }
+
+            return `
+                <div class="history-item ${item.type}">
+                    <div class="h-icon"><i class="fas ${icon}"></i></div>
+                    <div class="h-detail">
+                        <div class="h-action">${action}</div>
+                        <div class="h-change">${change}</div>
+                    </div>
+                    <div class="h-result">${item.to}</div>
+                    <div class="h-time">${item.time}</div>
+                </div>`;
+        }).join('');
+    }
+
+    function updateGoal() {
+        if (state.goalValue === null) {
+            goalStatus.textContent = '未设定目标';
+            goalPercent.textContent = '';
+            goalFill.style.width = '0%';
+            goalFill.classList.remove('achieved');
+            return;
+        }
+
+        const goal = state.goalValue;
+        const current = state.count;
+        let pct;
+        if (goal === 0) {
+            pct = current >= 0 ? 100 : 0;
+        } else {
+            pct = Math.min(Math.max((current / goal) * 100, 0), 100);
+        }
+
+        goalFill.style.width = pct + '%';
+        goalPercent.textContent = pct.toFixed(1) + '%';
+
+        if (current >= goal) {
+            goalStatus.innerHTML = '<span class="achieved-text"><i class="fas fa-trophy"></i> 目标达成！</span>';
+            goalFill.classList.add('achieved');
+        } else {
+            goalStatus.textContent = `当前: ${current} / 目标: ${goal}`;
+            goalFill.classList.remove('achieved');
+        }
+    }
+
+    function checkGoal() {
+        if (state.goalValue !== null && state.count >= state.goalValue) {
+            const prevHistory = state.history.length > 1 ? state.history[1] : null;
+            const wasBelowGoal = prevHistory ? prevHistory.to < state.goalValue : true;
+            if (wasBelowGoal) {
+                showToast(`🎉 目标 ${state.goalValue} 已达成！`, 'fas fa-trophy', 'var(--warning)');
+            }
+        }
+    }
+
+    // ==================== Toast ====================
+    function showToast(message, icon, color) {
+        const container = document.getElementById('toastContainer');
+        const toast = document.createElement('div');
+        toast.className = 'toast';
+        toast.innerHTML = `<i class="${icon}" style="color:${color}; font-size:1.2rem;"></i> ${message}`;
+        container.appendChild(toast);
+
+        setTimeout(() => {
+            toast.classList.add('toast-out');
+            setTimeout(() => toast.remove(), 300);
+        }, 2500);
+    }
+
+    // ==================== 事件绑定 ====================
+    btnIncrement.addEventListener('click', increment);
+    btnDecrement.addEventListener('click', decrement);
+    btnReset.addEventListener('click', reset);
+
+    // 步长选择
+    document.querySelectorAll('.step-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.step-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            state.step = parseInt(btn.dataset.step);
+            saveState();
+        });
+    });
+
+    // 恢复步长按钮状态
+    function restoreStep() {
+        document.querySelectorAll('.step-btn').forEach(btn => {
+            btn.classList.toggle('active', parseInt(btn.dataset.step) === state.step);
+        });
+    }
+
+    // 清空历史
+    btnClearHistory.addEventListener('click', () => {
+        state.history = [];
+        saveState();
+        renderHistory();
+        showToast('历史记录已清空', 'fas fa-trash', 'var(--danger)');
+    });
+
+    // 目标设置
+    btnSetGoal.addEventListener('click', () => {
+        const val = goalInput.value.trim();
+        if (val === '') {
+            state.goalValue = null;
+            showToast('目标已清除', 'fas fa-times-circle', 'var(--text-secondary)');
+        } else {
+            const num = parseInt(val);
+            if (isNaN(num)) {
+                showToast('请输入有效数字', 'fas fa-exclamation-triangle', 'var(--danger)');
+                return;
+            }
+            state.goalValue = num;
+            showToast(`目标设为 ${num}`, 'fas fa-bullseye', 'var(--warning)');
+        }
+        goalInput.value = '';
+        saveState();
+        updateGoal();
+    });
+
+    goalInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') btnSetGoal.click();
+    });
+
+    // 键盘快捷键
+    document.addEventListener('keydown', (e) => {
+        // 如果焦点在输入框则不响应
+        if (e.target.tagName === 'INPUT') return;
+
+        switch (e.key) {
+            case 'ArrowUp':
+                e.preventDefault();
+                increment();
+                break;
+            case 'ArrowDown':
+                e.preventDefault();
+                decrement();
+                break;
+            case 'r':
+            case 'R':
+                reset();
+                break;
+            case '1':
+                document.querySelector('[data-step="1"]').click();
+                break;
+            case '2':
+                document.querySelector('[data-step="5"]').click();
+                break;
+            case '3':
+                document.querySelector('[data-step="10"]').click();
+                break;
+            case '4':
+                document.querySelector('[data-step="50"]').click();
+                break;
+            case '5':
+                document.querySelector('[data-step="100"]').click();
+                break;
+        }
+    });
+
+    // ==================== 初始化 ====================
+    restoreStep();
+    updateUI();
+</script>
+
+</body>
+</html>

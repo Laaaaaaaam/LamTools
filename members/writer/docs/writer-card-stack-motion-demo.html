@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>左侧卡片抽出动效示意</title>
+  <style>
+    :root {
+      --bg: #101111;
+      --main: #181818;
+      --left: #241c1a;
+      --line: #383431;
+      --text: #f0ece6;
+      --muted: #9d9790;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+    }
+
+    .stage {
+      width: min(1120px, calc(100vw - 40px));
+      height: min(680px, calc(100vh - 40px));
+      position: relative;
+      display: grid;
+      place-items: center;
+    }
+
+    .stack {
+      position: relative;
+      width: 860px;
+      max-width: 100%;
+      height: 520px;
+      --project-width: 320px;
+      --overlap: 34px;
+      --peek: 12px;
+      --reveal: calc(var(--project-width) - var(--overlap));
+    }
+
+    .left-card,
+    .main-card {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      border: 1px solid var(--line);
+      border-radius: 30px;
+      box-shadow: 0 34px 90px rgba(0,0,0,.45);
+      transition: transform .5s cubic-bezier(.2, .8, .2, 1);
+    }
+
+    .left-card {
+      left: 0;
+      width: var(--project-width);
+      z-index: 1;
+      background: linear-gradient(180deg, var(--left), #11191f);
+      transform: translateX(0);
+      border-radius: 0;
+      padding: 26px;
+      display: grid;
+      align-content: start;
+      gap: 18px;
+      overflow: hidden;
+    }
+
+    .main-card {
+      left: var(--peek);
+      right: 0;
+      z-index: 2;
+      background: var(--main);
+      padding: 30px 34px;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 24px;
+      transition:
+        left .5s cubic-bezier(.2, .8, .2, 1),
+        box-shadow .5s cubic-bezier(.2, .8, .2, 1);
+    }
+
+    .stack.open .left-card {
+      transform: translateX(0);
+    }
+
+    .stack.open .main-card {
+      left: var(--reveal);
+      right: 0;
+    }
+
+    .hint-edge {
+      position: absolute;
+      left: 0;
+      top: 96px;
+      bottom: 96px;
+      width: 12px;
+      z-index: 3;
+      border-radius: 999px;
+      background: rgba(255,255,255,.08);
+    }
+
+    .title {
+      font-size: 22px;
+      font-weight: 760;
+      line-height: 1.2;
+    }
+
+    .muted {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    .project {
+      border-radius: 18px;
+      background: rgba(255,255,255,.08);
+      padding: 16px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .row {
+      height: 54px;
+      border-radius: 16px;
+      background: #242424;
+    }
+
+    .row.short {
+      width: 68%;
+    }
+
+    .input {
+      height: 72px;
+      border-radius: 24px;
+      background: #2e2e2d;
+    }
+
+    .controls {
+      position: absolute;
+      right: 24px;
+      bottom: 24px;
+      z-index: 5;
+      display: flex;
+      gap: 10px;
+    }
+
+    button {
+      border: 1px solid #45423e;
+      border-radius: 14px;
+      background: #2a2a29;
+      color: var(--text);
+      padding: 10px 14px;
+      font: inherit;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <div class="stack" id="stack">
+      <aside class="left-card">
+        <div>
+          <div class="title">项目卡片</div>
+          <div class="muted">原本压在主界面后面</div>
+        </div>
+        <div class="project">
+          <strong>视频剪辑软件</strong>
+          <span class="muted">E:\WriterTest\video-editor</span>
+        </div>
+        <div class="project">
+          <strong>LamMate</strong>
+          <span class="muted">E:\LamMate</span>
+        </div>
+      </aside>
+
+      <main class="main-card">
+        <div>
+          <div class="title">主界面卡片</div>
+          <div class="muted">覆盖在左侧项目卡片上方</div>
+        </div>
+        <div>
+          <div class="row"></div>
+          <br />
+          <div class="row short"></div>
+        </div>
+        <div class="input"></div>
+      </main>
+
+      <div class="hint-edge" title="触发边缘"></div>
+    </div>
+
+    <div class="controls">
+      <button id="toggle">打开 / 收回</button>
+    </div>
+  </div>
+
+  <script>
+    const stack = document.getElementById("stack");
+    document.getElementById("toggle").addEventListener("click", () => {
+      stack.classList.toggle("open");
+    });
+  </script>
+</body>
+</html>

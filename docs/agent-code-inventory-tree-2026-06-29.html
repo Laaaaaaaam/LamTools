@@ -1,0 +1,1531 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LamTools Agent 功能树</title>
+  <style>
+    :root {
+      --bg: #111111;
+      --panel: #262625;
+      --panel-2: #1d1e1e;
+      --panel-3: #30302f;
+      --line: #3b3a38;
+      --text: #f2efeb;
+      --muted: #b8b2aa;
+      --faint: #8b857d;
+      --green: #32d17d;
+      --blue: #79bcff;
+      --orange: #ff9142;
+      --purple: #bd8cff;
+      --red: #f5555d;
+      --radius-sm: 6px;
+      --radius: 12px;
+      --radius-lg: 18px;
+      --font-sans: Inter, "Noto Sans SC", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --font-mono: "JetBrains Mono", "Cascadia Code", Consolas, ui-monospace, monospace;
+      --shadow: 0 18px 48px rgba(0, 0, 0, .38);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-sans);
+      letter-spacing: 0;
+    }
+
+    body {
+      overflow-x: hidden;
+    }
+
+    #tree-canvas {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      width: 100vw;
+      height: 100vh;
+      background:
+        radial-gradient(circle at 18% 20%, rgba(121, 188, 255, .11), transparent 31%),
+        radial-gradient(circle at 80% 18%, rgba(50, 209, 125, .08), transparent 29%),
+        linear-gradient(135deg, #111111 0%, #171717 45%, #101010 100%);
+    }
+
+    .app {
+      position: relative;
+      z-index: 1;
+      min-height: 100vh;
+      padding: 28px;
+    }
+
+    .shell {
+      width: min(1240px, 100%);
+      min-height: calc(100vh - 56px);
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 300px minmax(0, 1fr);
+      gap: 18px;
+    }
+
+    .side,
+    .main {
+      border: 1px solid rgba(242, 239, 235, .11);
+      background: rgba(29, 30, 30, .88);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+    }
+
+    .side {
+      border-radius: var(--radius);
+      padding: 18px;
+      align-self: start;
+      position: sticky;
+      top: 28px;
+      max-height: calc(100vh - 56px);
+      overflow: auto;
+    }
+
+    .main {
+      border-radius: var(--radius);
+      min-height: calc(100vh - 56px);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+
+    .mark {
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      border: 1px solid rgba(121, 188, 255, .4);
+      background: linear-gradient(145deg, rgba(121, 188, 255, .18), rgba(50, 209, 125, .12));
+      display: grid;
+      place-items: center;
+      font: 700 14px var(--font-mono);
+      color: var(--blue);
+    }
+
+    .brand-title {
+      margin: 0;
+      font-size: 15px;
+      line-height: 1.25;
+    }
+
+    .brand-subtitle {
+      margin: 2px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .side-section {
+      padding-top: 16px;
+      border-top: 1px solid rgba(242, 239, 235, .1);
+      margin-top: 16px;
+    }
+
+    .side-label {
+      margin: 0 0 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .metric-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .metric {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 0;
+      border-bottom: 1px solid rgba(242, 239, 235, .07);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .metric strong {
+      color: var(--text);
+      font-weight: 650;
+    }
+
+    .nav-stack {
+      display: grid;
+      gap: 8px;
+    }
+
+    .nav-button {
+      width: 100%;
+      border: 1px solid rgba(242, 239, 235, .12);
+      border-radius: 8px;
+      background: rgba(38, 38, 37, .8);
+      color: var(--text);
+      padding: 10px 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+      font: inherit;
+      text-align: left;
+      transition: transform .18s ease, border-color .18s ease, background .18s ease;
+    }
+
+    .nav-button:hover,
+    .nav-button:focus-visible {
+      border-color: rgba(121, 188, 255, .55);
+      background: rgba(48, 48, 47, .9);
+      outline: none;
+      transform: translateY(-1px);
+    }
+
+    .nav-button.active {
+      border-color: rgba(50, 209, 125, .62);
+      background: rgba(50, 209, 125, .12);
+    }
+
+    .nav-button span:last-child {
+      color: var(--muted);
+      font: 600 12px var(--font-mono);
+    }
+
+    .topbar {
+      min-height: 84px;
+      border-bottom: 1px solid rgba(242, 239, 235, .1);
+      padding: 18px 22px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      background: rgba(17, 17, 17, .42);
+    }
+
+    .crumbs {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .crumb {
+      border: 1px solid rgba(242, 239, 235, .13);
+      background: rgba(38, 38, 37, .72);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 7px 10px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: border-color .18s ease, background .18s ease;
+    }
+
+    .crumb:hover,
+    .crumb:focus-visible {
+      border-color: rgba(121, 188, 255, .56);
+      outline: none;
+    }
+
+    .crumb.current {
+      color: var(--green);
+      cursor: default;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .tool-button {
+      border: 1px solid rgba(242, 239, 235, .13);
+      background: rgba(38, 38, 37, .8);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 8px 11px;
+      font: 600 13px var(--font-sans);
+      cursor: pointer;
+      transition: border-color .18s ease, background .18s ease, transform .18s ease;
+    }
+
+    .tool-button:hover,
+    .tool-button:focus-visible {
+      border-color: rgba(121, 188, 255, .55);
+      background: rgba(48, 48, 47, .9);
+      outline: none;
+      transform: translateY(-1px);
+    }
+
+    .content {
+      padding: 24px;
+      flex: 1;
+      overflow: auto;
+    }
+
+    .view-head {
+      display: grid;
+      gap: 9px;
+      margin-bottom: 22px;
+      max-width: 860px;
+    }
+
+    .view-kicker {
+      color: var(--blue);
+      font: 700 12px var(--font-mono);
+    }
+
+    .view-title {
+      margin: 0;
+      font-size: 32px;
+      line-height: 1.12;
+      font-weight: 760;
+      text-wrap: balance;
+    }
+
+    .view-copy {
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.75;
+      max-width: 72ch;
+      text-wrap: pretty;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 12px;
+    }
+
+    .tree-stage {
+      border: 1px solid rgba(242, 239, 235, .12);
+      border-radius: var(--radius);
+      background: rgba(17, 17, 17, .38);
+      overflow: hidden;
+    }
+
+    .tree-toolbar {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: center;
+      padding: 12px 14px;
+      border-bottom: 1px solid rgba(242, 239, 235, .08);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .tree-toolbar strong {
+      color: var(--text);
+      font-weight: 650;
+    }
+
+    .tree-wrap {
+      min-height: 520px;
+      overflow: auto;
+    }
+
+    .tree-svg {
+      display: block;
+      width: 100%;
+      min-width: 820px;
+      height: 560px;
+    }
+
+    .tree-link {
+      fill: none;
+      stroke: rgba(184, 178, 170, .42);
+      stroke-width: 1.4;
+      stroke-linecap: round;
+      stroke-dasharray: 420;
+      stroke-dashoffset: 420;
+      animation: linkDraw .42s ease forwards;
+    }
+
+    .tree-node {
+      cursor: pointer;
+      outline: none;
+    }
+
+    .tree-hit {
+      fill: transparent;
+      pointer-events: all;
+    }
+
+    .tree-node circle {
+      fill: rgba(38, 38, 37, .96);
+      stroke: rgba(242, 239, 235, .2);
+      stroke-width: 1.3;
+      transition: r .18s ease, stroke .18s ease, fill .18s ease;
+    }
+
+    .tree-node[data-tone="blue"] circle { stroke: rgba(121, 188, 255, .72); }
+    .tree-node[data-tone="green"] circle { stroke: rgba(50, 209, 125, .72); }
+    .tree-node[data-tone="orange"] circle { stroke: rgba(255, 145, 66, .72); }
+    .tree-node[data-tone="purple"] circle { stroke: rgba(189, 140, 255, .72); }
+
+    .tree-node:hover circle,
+    .tree-node:focus-visible circle {
+      r: 12;
+      fill: rgba(48, 48, 47, 1);
+      stroke-width: 2;
+    }
+
+    .tree-node.root circle {
+      r: 13;
+      fill: rgba(121, 188, 255, .12);
+    }
+
+    .tree-node-label {
+      fill: var(--text);
+      font: 650 14px var(--font-sans);
+      dominant-baseline: middle;
+      pointer-events: none;
+    }
+
+    .tree-node-meta {
+      fill: var(--muted);
+      font: 600 11px var(--font-mono);
+      dominant-baseline: middle;
+      pointer-events: none;
+    }
+
+    .tree-node-path {
+      fill: var(--faint);
+      font: 600 10px var(--font-mono);
+      dominant-baseline: middle;
+      pointer-events: none;
+    }
+
+    .tree-node-enter {
+      opacity: 0;
+      animation: nodeIn .28s ease forwards;
+    }
+
+    .small-detail-panel {
+      border-top: 1px solid rgba(242, 239, 235, .08);
+      background: rgba(17, 17, 17, .34);
+    }
+
+    .small-detail-row {
+      display: grid;
+      grid-template-columns: minmax(180px, .65fr) minmax(0, 1.35fr);
+      gap: 12px;
+      padding: 12px 14px;
+      border-top: 1px solid rgba(242, 239, 235, .07);
+      align-items: start;
+    }
+
+    .small-detail-row:first-child {
+      border-top: 0;
+    }
+
+    .small-detail-title {
+      color: var(--text);
+      font-weight: 680;
+      line-height: 1.45;
+    }
+
+    .small-detail-paths {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .card {
+      position: relative;
+      border: 1px solid rgba(242, 239, 235, .12);
+      border-radius: var(--radius);
+      background: rgba(38, 38, 37, .78);
+      padding: 16px;
+      min-height: 160px;
+      cursor: pointer;
+      overflow: hidden;
+      transition: transform .2s ease, border-color .2s ease, background .2s ease;
+    }
+
+    .card::after {
+      content: "";
+      position: absolute;
+      inset: auto 14px 12px auto;
+      width: 34px;
+      height: 2px;
+      border-radius: 999px;
+      background: currentColor;
+      opacity: .36;
+      transform: scaleX(.35);
+      transform-origin: right;
+      transition: transform .2s ease, opacity .2s ease;
+    }
+
+    .card:hover,
+    .card:focus-visible {
+      border-color: rgba(121, 188, 255, .56);
+      background: rgba(48, 48, 47, .9);
+      transform: translateY(-3px);
+      outline: none;
+    }
+
+    .card:hover::after,
+    .card:focus-visible::after {
+      opacity: .72;
+      transform: scaleX(1);
+    }
+
+    .card[data-tone="green"] { color: var(--green); }
+    .card[data-tone="blue"] { color: var(--blue); }
+    .card[data-tone="orange"] { color: var(--orange); }
+    .card[data-tone="purple"] { color: var(--purple); }
+
+    .card-index {
+      color: currentColor;
+      font: 700 12px var(--font-mono);
+      margin-bottom: 16px;
+    }
+
+    .card-title {
+      margin: 0;
+      color: var(--text);
+      font-size: 20px;
+      line-height: 1.25;
+      font-weight: 720;
+      text-wrap: balance;
+    }
+
+    .card-meta {
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .card-count {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      color: var(--text);
+      background: rgba(17, 17, 17, .45);
+      border: 1px solid rgba(242, 239, 235, .1);
+      border-radius: 999px;
+      padding: 4px 8px;
+      font: 650 12px var(--font-mono);
+    }
+
+    .small-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 12px;
+    }
+
+    .small-card {
+      border: 1px solid rgba(242, 239, 235, .12);
+      border-radius: var(--radius);
+      background: rgba(38, 38, 37, .78);
+      padding: 15px;
+      min-height: 144px;
+      display: grid;
+      gap: 10px;
+      align-content: start;
+      animation: itemIn .24s ease both;
+    }
+
+    .small-title {
+      margin: 0;
+      font-size: 16px;
+      line-height: 1.4;
+      color: var(--text);
+    }
+
+    .path-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .path-chip {
+      max-width: 100%;
+      border: 1px solid rgba(242, 239, 235, .11);
+      border-radius: 999px;
+      padding: 5px 8px;
+      background: rgba(17, 17, 17, .48);
+      color: var(--muted);
+      font: 600 11px / 1.35 var(--font-mono);
+      overflow-wrap: anywhere;
+    }
+
+    .judgement {
+      color: var(--faint);
+      font-size: 13px;
+      line-height: 1.7;
+      margin: 0;
+    }
+
+    .risk-panel {
+      margin-top: 22px;
+      border: 1px solid rgba(242, 239, 235, .12);
+      border-radius: var(--radius);
+      background: rgba(17, 17, 17, .42);
+      overflow: hidden;
+    }
+
+    .risk-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) 86px minmax(0, .8fr);
+      gap: 12px;
+      padding: 12px 14px;
+      border-top: 1px solid rgba(242, 239, 235, .08);
+      color: var(--muted);
+      font-size: 13px;
+      align-items: center;
+    }
+
+    .risk-row:first-child {
+      border-top: 0;
+      color: var(--text);
+      background: rgba(242, 239, 235, .04);
+      font-weight: 650;
+    }
+
+    .risk-path {
+      font-family: var(--font-mono);
+      overflow-wrap: anywhere;
+    }
+
+    .fade-enter {
+      animation: viewIn .24s ease both;
+    }
+
+    @keyframes viewIn {
+      from {
+        opacity: 0;
+        transform: translateY(8px);
+        filter: blur(6px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+        filter: blur(0);
+      }
+    }
+
+    @keyframes itemIn {
+      from {
+        opacity: 0;
+        transform: translateY(7px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    @keyframes nodeIn {
+      from {
+        opacity: 0;
+      }
+      to {
+        opacity: 1;
+      }
+    }
+
+    @keyframes linkDraw {
+      to {
+        stroke-dashoffset: 0;
+      }
+    }
+
+    @media (max-width: 880px) {
+      .app {
+        padding: 12px;
+      }
+
+      .shell {
+        grid-template-columns: 1fr;
+        min-height: auto;
+      }
+
+      .side {
+        position: static;
+        max-height: none;
+      }
+
+      .main {
+        min-height: 70vh;
+      }
+
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .toolbar {
+        justify-content: flex-start;
+      }
+
+      .content {
+        padding: 18px;
+      }
+
+      .view-title {
+        font-size: 26px;
+      }
+
+      .risk-row {
+        grid-template-columns: 1fr;
+      }
+
+      .tree-wrap {
+        min-height: 360px;
+      }
+
+      .tree-svg {
+        min-width: 100%;
+        height: 420px;
+      }
+
+      .small-detail-row {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+        transition-duration: .01ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="tree-canvas" aria-hidden="true"></canvas>
+  <div class="app">
+    <div class="shell">
+      <aside class="side" aria-label="导航与统计">
+        <div class="brand">
+          <div class="mark">LT</div>
+          <div>
+            <h1 class="brand-title">Agent 功能树</h1>
+            <p class="brand-subtitle">基于 2026-06-29 代码功能底图</p>
+          </div>
+        </div>
+
+        <div class="metric-list" aria-label="覆盖概览">
+          <div class="metric"><span>大类</span><strong>4</strong></div>
+          <div class="metric"><span>中类</span><strong>21</strong></div>
+          <div class="metric"><span>小类</span><strong>101</strong></div>
+          <div class="metric"><span>重点</span><strong>Agent 核心能力</strong></div>
+        </div>
+
+        <div class="side-section">
+          <p class="side-label">大类快速进入</p>
+          <div id="side-nav" class="nav-stack"></div>
+        </div>
+
+        <div class="side-section">
+          <p class="side-label">交互规则</p>
+          <div class="metric-list">
+            <div class="metric"><span>点击大类</span><strong>进入中类</strong></div>
+            <div class="metric"><span>点击中类</span><strong>查看小类</strong></div>
+            <div class="metric"><span>返回</span><strong>面包屑</strong></div>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <nav id="crumbs" class="crumbs" aria-label="层级导航"></nav>
+          <div class="toolbar">
+            <button class="tool-button" id="reset-btn" type="button">回到大类</button>
+            <button class="tool-button" id="inventory-btn" type="button">打开原始清单</button>
+          </div>
+        </header>
+        <section class="content">
+          <div id="view"></div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script type="module">
+    import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
+
+    const DATA = [
+      {
+        id: "pre",
+        title: "LLM 前",
+        tone: "blue",
+        summary: "用户输入进入模型前的整理、筛选、拼接、预算和配置。",
+        mids: [
+          {
+            id: "entry",
+            title: "任务入口与会话上下文",
+            summary: "统一 Web、CLI、App Server、工作台和会话选择入口。",
+            judgement: "可靠到存疑。入口完整，但 Writer Web、App Server、CLI、TUI 多入口并存。",
+            smalls: [
+              { title: "Web/API 入口", paths: ["members/writer/backend/app/routers/session.py", "members/writer/backend/app/routers/core_http.py", "members/artist/backend/app/routers/session.py", "members/artist/backend/app/routers/core_http.py"] },
+              { title: "CLI 入口", paths: ["members/writer/backend/writer_cli/**", "members/artist/backend/app/cli.py", "writer.cmd", "artist.cmd", "scripts/member_cli.py"] },
+              { title: "App Server 输入接收", paths: ["members/writer/backend/app/app_server/router.py", "members/writer/backend/app/app_server/connection.py", "members/writer/backend/app/app_server/queue.py"] },
+              { title: "前端输入框与工作台入口", paths: ["members/writer/frontend/src/views/CoreWorkbenchView.vue", "members/artist/frontend/src/views/CoreWorkbenchView.vue", "core/ui/src/components/ComposerBar.vue"] },
+              { title: "会话/项目选择上下文", paths: ["members/writer/frontend/src/stores/session.ts", "members/writer/frontend/src/stores/project.ts", "members/artist/frontend/src/stores/session.ts", "core/ui/src/components/SessionSidebar.vue"] }
+            ]
+          },
+          {
+            id: "persona",
+            title: "Persona 与项目规则装载",
+            summary: "装载产品身份、执行纪律、平台约束和项目指令。",
+            judgement: "存疑。方向与 Claude 项目指令机制一致，但需要控制长度、冲突和装载顺序。",
+            smalls: [
+              { title: "Writer persona", paths: ["members/writer/backend/app/core/persona.py", "members/writer/backend/app/prompts/writer/persona.md"] },
+              { title: "Writer 固定规则片段", paths: ["members/writer/backend/app/prompts/writer/execution_discipline.md", "members/writer/backend/app/prompts/writer/reply_contract.md", "members/writer/backend/app/prompts/writer/platform.md", "members/writer/backend/app/prompts/writer/platform_windows.md"] },
+              { title: "AGENTS/project instructions", paths: ["members/writer/backend/app/core/writer/project_instructions.py", "members/writer/backend/app/core/prompt_files.py", "members/writer/backend/app/prompts/writer/prompt_files.md"] },
+              { title: "资源目录", paths: ["members/writer/backend/app/core/resource_dirs.py", "core/skills/README.md", "members/writer/skills/README.md"] },
+              { title: "Artist 身份与回复规则", paths: ["members/artist/backend/app/core/artist/identity.py", "members/artist/backend/app/core/artist/reply.py"] }
+            ]
+          },
+          {
+            id: "prompt",
+            title: "Prompt 拼接与预算",
+            summary: "将任务、上下文、规则和 token 预算拼成模型输入。",
+            judgement: "存疑。Writer prompt 拼接与上下文预算散在多个模块。",
+            smalls: [
+              { title: "Core prompt 协议", paths: ["core/src/lamtools_core/prompt/__init__.py"] },
+              { title: "Writer prompt 组装", paths: ["members/writer/backend/app/core/prompt_assembler.py"] },
+              { title: "Artist prompt 组装", paths: ["members/artist/backend/app/core/prompt_assembler.py"] },
+              { title: "token 估算", paths: ["core/src/lamtools_core/tokens.py"] },
+              { title: "上下文规格", paths: ["members/writer/backend/app/core/writer/context_specs.py"] },
+              { title: "任务可行性估算", paths: ["members/writer/backend/app/core/writer/runtime_feasibility.py"] }
+            ]
+          },
+          {
+            id: "memory",
+            title: "记忆召回与上下文窗口",
+            summary: "召回跨会话、任务、视觉和小说相关上下文。",
+            judgement: "存疑。记忆是必要能力，但当前自研层较多。",
+            smalls: [
+              { title: "Core 记忆协议", paths: ["core/src/lamtools_core/mem/__init__.py"] },
+              { title: "Writer 记忆 schema/store/budget/recall/lifecycle/provenance", paths: ["members/writer/backend/app/core/mem/**"] },
+              { title: "Writer 会话记忆", paths: ["members/writer/backend/app/core/writer/session_memory.py"] },
+              { title: "Novel 记忆适配", paths: ["members/writer/backend/app/core/mem/adapters/novel_writer.py"] },
+              { title: "Artist 记忆适配", paths: ["members/artist/backend/app/core/mem/**"] },
+              { title: "Artist 视觉上下文", paths: ["members/artist/backend/app/services/visual_workspace.py", "members/artist/backend/app/services/image_context_resolver.py", "members/artist/backend/app/core/artist/image_context.py"] }
+            ]
+          },
+          {
+            id: "model",
+            title: "模型与供应商配置",
+            summary: "维护 LLM/provider 配置、适配 profiles 和设置页。",
+            judgement: "可靠到存疑。配置完整，但多供应商兼容逻辑需要收敛。",
+            smalls: [
+              { title: "Core provider/LLM 协议", paths: ["core/src/lamtools_core/provider/__init__.py", "core/src/lamtools_core/llm/__init__.py"] },
+              { title: "Writer 模型配置", paths: ["members/writer/backend/app/models/llm_config.py", "members/writer/backend/app/services/llm_config_service.py", "members/writer/backend/app/routers/config.py"] },
+              { title: "Writer 适配配置", paths: ["members/writer/backend/app/llm_adapters/*.jsonc", "members/writer/backend/app/utils/llm_adapter_profiles.py"] },
+              { title: "Writer 设置页", paths: ["members/writer/frontend/src/views/SettingsView.vue", "members/writer/frontend/src/stores/config.ts"] },
+              { title: "Artist provider 配置", paths: ["members/artist/backend/app/models/api_provider.py", "members/artist/backend/app/services/api_manager.py", "members/artist/backend/app/routers/api_provider.py"] },
+              { title: "Artist 设置/API 页", paths: ["members/artist/frontend/src/views/ApiManage.vue", "members/artist/frontend/src/views/SettingsView.vue", "members/artist/frontend/src/stores/provider.ts"] }
+            ]
+          }
+        ]
+      },
+      {
+        id: "during",
+        title: "LLM 中",
+        tone: "green",
+        summary: "模型调用期间的 agent loop、工具执行、权限、状态推进和中断恢复。",
+        mids: [
+          {
+            id: "loop",
+            title: "核心循环",
+            summary: "共享 Kernel 管流程，成员 Kit 管业务。",
+            judgement: "可靠主线。两个 member adapter 过大，是首批深模块拆分候选。",
+            smalls: [
+              { title: "Core loop", paths: ["core/src/lamtools_core/kernel/loop.py"] },
+              { title: "Kit 协议", paths: ["core/src/lamtools_core/kernel/kit.py"] },
+              { title: "loop 策略/状态/错误/追踪", paths: ["core/src/lamtools_core/kernel/policy.py", "core/src/lamtools_core/kernel/state.py", "core/src/lamtools_core/kernel/errors.py", "core/src/lamtools_core/kernel/tracing.py"] },
+              { title: "Writer Kit 适配", paths: ["members/writer/backend/app/core/writer/core_kernel_adapter.py"] },
+              { title: "Artist Kit 适配", paths: ["members/artist/backend/app/core/artist/core_kernel_adapter.py"] }
+            ]
+          },
+          {
+            id: "llm-stream",
+            title: "模型调用与流式接入",
+            summary: "处理请求 payload、响应归一化、SSE 和前端订阅。",
+            judgement: "可靠到存疑。核心协议有测试，但成员仍有流式兼容和展示映射。",
+            smalls: [
+              { title: "Core LLM helper", paths: ["core/src/lamtools_core/llm/helpers.py", "core/src/lamtools_core/llm/adapter.py", "core/src/lamtools_core/llm/policy.py"] },
+              { title: "Writer LLM client", paths: ["members/writer/backend/app/utils/llm_client.py"] },
+              { title: "Artist LLM client", paths: ["members/artist/backend/app/utils/llm_client.py"] },
+              { title: "Writer app-server stream", paths: ["members/writer/backend/app/app_server/connection.py", "members/writer/backend/app/app_server/runtime_bridge.py"] },
+              { title: "Artist session stream", paths: ["members/artist/frontend/src/api/sse.ts", "members/artist/frontend/src/composables/useSessionEvents.ts"] },
+              { title: "SSE 格式化", paths: ["core/src/lamtools_core/sse/__init__.py"] }
+            ]
+          },
+          {
+            id: "tools",
+            title: "工具规格、执行与权限",
+            summary: "定义工具、执行工具、限制命令和管理 MCP。",
+            judgement: "可靠到存疑。工具与权限是必要主线，MCP/联网类工具需验证失败语义。",
+            smalls: [
+              { title: "Core tool 协议", paths: ["core/src/lamtools_core/tool/__init__.py", "core/src/lamtools_core/tool/permission.py"] },
+              { title: "Writer tool specs", paths: ["members/writer/backend/app/core/writer/tool_specs.py"] },
+              { title: "Writer tool executor", paths: ["members/writer/backend/app/core/writer/tool_executor.py"] },
+              { title: "Writer 命令权限", paths: ["members/writer/backend/app/core/writer/permission.py", "members/writer/backend/app/core/writer/scope_guard.py", "members/writer/backend/app/app_server/security.py"] },
+              { title: "Writer MCP", paths: ["members/writer/backend/app/core/mcp/**"] },
+              { title: "Artist tool specs/tools", paths: ["members/artist/backend/app/core/artist/tool_specs.py", "members/artist/backend/app/core/artist/tools.py"] },
+              { title: "Artist 图像执行器", paths: ["members/artist/backend/app/services/executors/**", "members/artist/backend/app/services/generate_service.py"] }
+            ]
+          },
+          {
+            id: "human",
+            title: "人机协作、审批与队列",
+            summary: "处理 guardrail、审批、等待用户、队列输入和运行中引导。",
+            judgement: "可靠到存疑。Writer 队列、审批、运行中输入的状态投影仍是高风险区。",
+            smalls: [
+              { title: "Core guardrail", paths: ["core/src/lamtools_core/guardrail/__init__.py"] },
+              { title: "Writer guardrail", paths: ["members/writer/backend/app/core/guardrail.py"] },
+              { title: "App Server 审批", paths: ["members/writer/backend/app/app_server/approvals.py"] },
+              { title: "队列输入与 steer", paths: ["members/writer/backend/app/app_server/queue.py", "members/writer/backend/app/models/queued_input.py", "members/writer/backend/app/services/queued_input_service.py"] },
+              { title: "前端等待/审批操作", paths: ["members/writer/frontend/src/appServer/**", "members/writer/frontend/src/views/CoreWorkbenchView.vue"] },
+              { title: "Artist 检查点/反馈", paths: ["members/artist/backend/app/core/artist/feedback.py", "members/artist/backend/app/core/artist/visual_review.py"] }
+            ]
+          },
+          {
+            id: "agents",
+            title: "子代理与多代理",
+            summary: "封装子代理调用、架构代理和子代理设置。",
+            judgement: "存疑。概念与 handoffs/subagents 对齐，但协议还需要收敛。",
+            smalls: [
+              { title: "Core agent 协议", paths: ["core/src/lamtools_core/agent.py"] },
+              { title: "Writer agent runtime", paths: ["members/writer/backend/app/core/writer/agent_runtime.py"] },
+              { title: "Architecture agent", paths: ["members/writer/backend/app/core/writer/agents/architecture_agent.py"] },
+              { title: "Writer 子代理配置 UI", paths: ["members/writer/frontend/src/views/SettingsView.vue"] },
+              { title: "子代理事件", paths: ["members/writer/backend/app/core/writer/events.py"] }
+            ]
+          },
+          {
+            id: "events",
+            title: "运行事件与实时投影",
+            summary: "把运行过程转换为可持久化、可回放、可展示的事件。",
+            judgement: "存疑。Writer 前端投影重复已先删掉；Core event、Writer event、App Server event 与 transcript/app snapshot 边界仍需继续收敛。",
+            smalls: [
+              { title: "Core event", paths: ["core/src/lamtools_core/event/__init__.py", "core/src/lamtools_core/run_event/__init__.py"] },
+              { title: "Writer runtime event", paths: ["members/writer/backend/app/core/writer/events.py", "members/writer/backend/app/models/runtime_event.py", "members/writer/backend/app/routers/runtime_event.py"] },
+              { title: "App Server ledger/snapshot/reducer", paths: ["members/writer/backend/app/app_server/ledger.py", "members/writer/backend/app/app_server/snapshot.py", "members/writer/backend/app/app_server/reducer.py"] },
+              { title: "前端 snapshot/selectors/store", paths: ["members/writer/frontend/src/appServer/snapshot.ts", "members/writer/frontend/src/appServer/selectors.ts", "members/writer/frontend/src/appServer/store.ts"] },
+              { title: "共享运行面板", paths: ["core/ui/src/components/RuntimePanel.vue", "core/ui/src/helpers/runtimeSteps.ts"] },
+              { title: "Artist 事件", paths: ["members/artist/backend/app/core/artist/events.py", "members/artist/backend/app/core/events/__init__.py", "members/artist/frontend/src/stores/session.ts"] }
+            ]
+          }
+        ]
+      },
+      {
+        id: "post",
+        title: "LLM 后",
+        tone: "orange",
+        summary: "模型输出之后的解释、落库、展示、验证和可恢复状态。",
+        mids: [
+          {
+            id: "parse",
+            title: "输出解析与状态转换",
+            summary: "将模型文本或工具调用解析为业务动作、部件和状态。",
+            judgement: "可靠到存疑。兼容旧字段的代码要压缩到明确迁移层。",
+            smalls: [
+              { title: "Core runtime 结果协议", paths: ["core/src/lamtools_core/runtime/__init__.py"] },
+              { title: "Writer schema/parser/transition", paths: ["members/writer/backend/app/core/writer/schemas.py", "members/writer/backend/app/core/writer/turn_parser.py", "members/writer/backend/app/core/writer/transitions.py"] },
+              { title: "Writer action/part/artifact", paths: ["members/writer/backend/app/core/writer/artifacts.py"] },
+              { title: "Artist schema/parser/transition", paths: ["members/artist/backend/app/core/artist/schemas.py", "members/artist/backend/app/core/artist/turn_parser.py", "members/artist/backend/app/core/artist/transitions.py", "members/artist/backend/app/core/artist/normalizer.py", "members/artist/backend/app/core/artist/parse_helpers.py"] },
+              { title: "Artist artifact/contact sheet", paths: ["members/artist/backend/app/core/artist/artifacts.py", "members/artist/backend/app/core/artist/artifact_registry.py", "members/artist/backend/app/core/artist/contact_sheet.py"] }
+            ]
+          },
+          {
+            id: "verify",
+            title: "验收、自评与修复请求",
+            summary: "判断任务是否完成，形成自评、修复请求和视觉检查。",
+            judgement: "存疑。验收关键但 Writer verifier 单文件过大。",
+            smalls: [
+              { title: "Writer completion verifier", paths: ["members/writer/backend/app/core/writer/completion_verifier.py"] },
+              { title: "Writer verification specs", paths: ["members/writer/backend/app/core/writer/verification_specs.py"] },
+              { title: "Writer failure specs", paths: ["members/writer/backend/app/core/writer/failure_specs.py"] },
+              { title: "Writer self review", paths: ["members/writer/backend/app/core/writer/self_review.py"] },
+              { title: "Artist visual review", paths: ["members/artist/backend/app/core/artist/visual_review.py"] },
+              { title: "Novel guardrail/self review", paths: ["members/writer/backend/app/core/writer/novel/guardrail.py", "members/writer/backend/app/core/writer/novel/self_review.py"] }
+            ]
+          },
+          {
+            id: "persist",
+            title: "持久化、会话和 transcript",
+            summary: "把会话、消息、项目、附件、计费和 transcript 落库。",
+            judgement: "可靠到存疑。手写迁移和多套状态表需要继续压缩。",
+            smalls: [
+              { title: "Core session/usage", paths: ["core/src/lamtools_core/session/__init__.py", "core/src/lamtools_core/usage/__init__.py"] },
+              { title: "Writer DB 与模型", paths: ["members/writer/backend/app/database.py", "members/writer/backend/app/models/**"] },
+              { title: "Writer session lifecycle", paths: ["members/writer/backend/app/services/session_lifecycle.py"] },
+              { title: "Writer transcript", paths: ["members/writer/backend/app/services/transcript_service.py", "members/writer/backend/app/models/transcript.py"] },
+              { title: "Writer project/attachment/step", paths: ["members/writer/backend/app/routers/project.py", "members/writer/backend/app/routers/attachment.py", "members/writer/backend/app/routers/step.py", "members/writer/backend/app/services/attachment_service.py"] },
+              { title: "Artist DB 与模型", paths: ["members/artist/backend/app/database.py", "members/artist/backend/app/models/**"] },
+              { title: "Artist session/reference/billing", paths: ["members/artist/backend/app/services/session_manager.py", "members/artist/backend/app/services/reference_manager.py", "members/artist/backend/app/services/billing_service.py"] }
+            ]
+          },
+          {
+            id: "display",
+            title: "前端消息渲染与状态展示",
+            summary: "把 transcript、runtime parts 和图片血缘展示给用户。",
+            judgement: "存疑。投影层是历史问题高发区。",
+            smalls: [
+              { title: "共享聊天线程", paths: ["core/ui/src/components/ChatThread.vue"] },
+              { title: "Writer transcript projection", paths: ["members/writer/frontend/src/runtime/transcript.ts", "members/writer/frontend/src/runtime/runtimeParts.ts", "members/writer/frontend/src/runtime/sessionStatus.ts"] },
+              { title: "Writer Markdown 渲染", paths: ["members/writer/frontend/src/components/MarkdownRenderer.vue"] },
+              { title: "Writer workbench 展示", paths: ["members/writer/frontend/src/views/CoreWorkbenchView.vue"] },
+              { title: "Artist workbench 展示", paths: ["members/artist/frontend/src/views/CoreWorkbenchView.vue"] },
+              { title: "Artist 图片查看/血缘", paths: ["members/artist/frontend/src/components/session/Lightbox.vue", "members/artist/frontend/src/components/session/LineageDrawer.vue"] }
+            ]
+          },
+          {
+            id: "artifact",
+            title: "产物、文件和 Git",
+            summary: "管理产物、文件范围、Git 版本和下载。",
+            judgement: "可靠到存疑。权限、路径和桌面环境差异必须继续作为硬门槛。",
+            smalls: [
+              { title: "Writer artifacts", paths: ["members/writer/backend/app/app_server/artifacts.py", "members/writer/backend/app/core/writer/artifacts.py"] },
+              { title: "Writer Git", paths: ["members/writer/backend/app/core/writer/git.py", "members/writer/backend/app/core/writer/git_context.py"] },
+              { title: "Writer 文件范围", paths: ["members/writer/backend/app/core/writer/scope_guard.py", "members/writer/backend/app/core/writer/permission.py"] },
+              { title: "Artist 下载与图片文件", paths: ["members/artist/backend/app/routers/download.py", "members/artist/backend/app/services/generate_service.py", "members/artist/backend/app/utils/image_client.py"] },
+              { title: "前端下载", paths: ["members/artist/frontend/src/api/download.ts", "members/artist/frontend/src/composables/useDownload.ts"] }
+            ]
+          }
+        ]
+      },
+      {
+        id: "other",
+        title: "其他",
+        tone: "purple",
+        summary: "非核心 agent 但影响运行、维护和删减判断的代码。",
+        mids: [
+          {
+            id: "shell",
+            title: "产品壳、共享 UI 与主题",
+            summary: "共享壳、设置壳、主题、布局和基础类型。",
+            judgement: "可靠到存疑。设置页和主题逻辑重复。",
+            smalls: [
+              { title: "Core UI shell", paths: ["core/ui/src/components/WorkspaceShell.vue", "core/ui/src/components/SettingsShell.vue"] },
+              { title: "Core UI controller/layout/theme", paths: ["core/ui/src/composables/**", "core/ui/src/helpers/**", "core/ui/src/data/theme-presets.ts"] },
+              { title: "Writer theme/labels", paths: ["members/writer/frontend/src/lib/**"] },
+              { title: "Artist theme/settings", paths: ["members/artist/frontend/src/views/SettingsView.vue"] },
+              { title: "UI 基础类型", paths: ["core/ui/src/types.ts", "members/*/frontend/src/types/index.ts"] }
+            ]
+          },
+          {
+            id: "app-shell",
+            title: "后端应用壳与桌面",
+            summary: "FastAPI、通用 app 工厂、桌面封装和配置迁移。",
+            judgement: "存疑。Electron、Tauri、PyInstaller 不应长期并行作为同等主线。",
+            smalls: [
+              { title: "Core app/http", paths: ["core/src/lamtools_core/app/factory.py", "core/src/lamtools_core/http/routes.py"] },
+              { title: "Writer FastAPI", paths: ["members/writer/backend/app/main.py"] },
+              { title: "Writer desktop", paths: ["members/writer/backend/desktop_server.py", "members/writer/frontend/electron/**", "members/writer/frontend/src-tauri/**"] },
+              { title: "Artist FastAPI", paths: ["members/artist/backend/app/main.py"] },
+              { title: "Artist 配置迁移", paths: ["members/artist/backend/app/config.py"] }
+            ]
+          },
+          {
+            id: "tests",
+            title: "测试与验证",
+            summary: "单元、契约、前端、E2E 和运行验证脚本。",
+            judgement: "存疑到债务。mock、真实外部依赖、历史 E2E、运行脚本混杂。",
+            smalls: [
+              { title: "Core 单元/契约", paths: ["core/tests/**", "core/ui/tests/**"] },
+              { title: "Writer 后端测试", paths: ["members/writer/backend/tests/**"] },
+              { title: "Writer 前端测试", paths: ["members/writer/frontend/tests/**"] },
+              { title: "Artist 后端测试", paths: ["members/artist/backend/tests/**"] },
+              { title: "E2E", paths: ["e2e/tests/**", "tests/*.spec.ts"] },
+              { title: "运行验证脚本", paths: ["members/writer/frontend/scripts/**", "members/writer/backend/*.ps1"] }
+            ]
+          },
+          {
+            id: "docs",
+            title: "脚本、模板和文档",
+            summary: "跨成员命令、骨架模板、根文档和成员文档。",
+            judgement: "可靠到债务。旧规划文档里仍有 HookSet、mock、过期入口等信息。",
+            smalls: [
+              { title: "跨成员脚本", paths: ["scripts/dev.ps1", "scripts/build.ps1", "scripts/test.ps1", "scripts/scaffold-member.ps1"] },
+              { title: "新成员模板", paths: ["core/templates/member/**"] },
+              { title: "根文档", paths: ["README.md", "PRODUCT.md", "docs/**"] },
+              { title: "成员文档", paths: ["members/writer/docs/**", "members/artist/docs/**"] }
+            ]
+          },
+          {
+            id: "artifacts",
+            title: "历史/运行产物与样例工程",
+            summary: "运行产物、历史归档、打包产物和样例工程。",
+            judgement: "债务为主。污染搜索、误导全量阅读、增加仓库体积。",
+            smalls: [
+              { title: "运行产物", paths: ["tmp/**", ".writer-artifacts/**", ".codex-runtime/**", "tmp_writer_*.log"] },
+              { title: "历史归档", paths: [".archives/**"] },
+              { title: "E2E 大型产物", paths: ["e2e/real-task-runs/**"] },
+              { title: "打包产物", paths: ["members/writer/frontend/release/**", "members/writer/frontend/src-tauri/target/**"] },
+              { title: "示例/夹具工程", paths: ["test-*", "test-blog-project/**", "kbtool-task/**"] },
+              { title: "个人简历文件", paths: ["resume.*"] }
+            ]
+          }
+        ]
+      }
+    ];
+
+    const RISKS = [
+      ["members/writer/backend/app/core/writer/core_kernel_adapter.py", "5376", "LLM 中/核心循环"],
+      ["core/ui/src/components/ChatThread.vue", "3475", "LLM 后/展示"],
+      ["members/writer/backend/app/services/writer_service.py", "2300", "LLM 前/中/后桥接"],
+      ["members/writer/frontend/src/views/CoreWorkbenchView.vue", "2273", "LLM 前/后展示"],
+      ["members/writer/frontend/src/views/SettingsView.vue", "2133", "其他/设置"],
+      ["members/artist/backend/app/core/artist/core_kernel_adapter.py", "1769", "LLM 中/核心循环"],
+      ["members/writer/backend/app/core/writer/agents/architecture_agent.py", "1721", "LLM 中/子代理"],
+      ["core/src/lamtools_core/kernel/loop.py", "1502", "LLM 中/核心循环"]
+    ];
+
+    const state = {
+      level: "root",
+      categoryId: null,
+      midId: null
+    };
+
+    const view = document.querySelector("#view");
+    const crumbs = document.querySelector("#crumbs");
+    const sideNav = document.querySelector("#side-nav");
+    const resetBtn = document.querySelector("#reset-btn");
+    const inventoryBtn = document.querySelector("#inventory-btn");
+
+    function categoryById(id) {
+      return DATA.find(item => item.id === id) || null;
+    }
+
+    function midById(category, id) {
+      return category?.mids.find(item => item.id === id) || null;
+    }
+
+    function countSmalls(category) {
+      return category.mids.reduce((sum, mid) => sum + mid.smalls.length, 0);
+    }
+
+    function renderSideNav() {
+      sideNav.innerHTML = DATA.map(category => `
+        <button class="nav-button ${state.categoryId === category.id ? "active" : ""}" data-nav-category="${category.id}" type="button">
+          <span>${category.title}</span>
+          <span>${category.mids.length}/${countSmalls(category)}</span>
+        </button>
+      `).join("");
+      sideNav.querySelectorAll("[data-nav-category]").forEach(button => {
+        button.addEventListener("click", () => enterCategory(button.dataset.navCategory));
+      });
+    }
+
+    function renderCrumbs() {
+      const category = categoryById(state.categoryId);
+      const mid = midById(category, state.midId);
+      const parts = [
+        `<button class="crumb ${state.level === "root" ? "current" : ""}" data-crumb="root" type="button">大类</button>`
+      ];
+      if (category) {
+        parts.push(`<button class="crumb ${state.level === "category" ? "current" : ""}" data-crumb="category" type="button">${category.title}</button>`);
+      }
+      if (mid) {
+        parts.push(`<button class="crumb current" data-crumb="mid" type="button">${mid.title}</button>`);
+      }
+      crumbs.innerHTML = parts.join("");
+      crumbs.querySelector('[data-crumb="root"]')?.addEventListener("click", enterRoot);
+      crumbs.querySelector('[data-crumb="category"]')?.addEventListener("click", () => enterCategory(state.categoryId));
+    }
+
+    function renderRoot() {
+      view.innerHTML = `
+        <div class="fade-enter">
+          <div class="view-head">
+            <div class="view-kicker">Level 1</div>
+            <h2 class="view-title">LamTools Agent 代码功能总览</h2>
+            <p class="view-copy">四个大类覆盖模型调用前、中、后，以及运行维护相关代码。点击树上的大类节点进入中类，再点击中类进入小类。</p>
+          </div>
+          ${renderTreeStage({
+            title: "大类树",
+            meta: "根节点 -> 4 个大类",
+            root: { id: "root-node", title: "LamTools Agent", meta: "4 大类", tone: "blue" },
+            children: DATA.map(category => ({
+              id: category.id,
+              title: category.title,
+              meta: `${category.mids.length} 中类 / ${countSmalls(category)} 小类`,
+              note: category.summary,
+              tone: category.tone,
+              action: "category"
+            }))
+          })}
+          <section class="risk-panel" aria-label="最大文件信号">
+            <div class="risk-row"><span>最大文件信号</span><span>行数</span><span>功能区</span></div>
+            ${RISKS.map(row => `
+              <div class="risk-row">
+                <span class="risk-path">${row[0]}</span>
+                <span>${row[1]}</span>
+                <span>${row[2]}</span>
+              </div>
+            `).join("")}
+          </section>
+        </div>
+      `;
+      bindTreeNodes();
+    }
+
+    function renderCategory(category) {
+      view.innerHTML = `
+        <div class="fade-enter">
+          <div class="view-head">
+            <div class="view-kicker">Level 2</div>
+            <h2 class="view-title">${category.title}</h2>
+            <p class="view-copy">${category.summary} 本层显示所有中类节点，点击任一中类进入对应小类树。</p>
+          </div>
+          ${renderTreeStage({
+            title: `${category.title} 中类树`,
+            meta: `1 个大类 -> ${category.mids.length} 个中类`,
+            root: { id: category.id, title: category.title, meta: `${countSmalls(category)} 小类`, tone: category.tone },
+            children: category.mids.map(mid => ({
+              id: mid.id,
+              title: mid.title,
+              meta: `${mid.smalls.length} 小类`,
+              note: mid.summary,
+              tone: category.tone,
+              action: "mid"
+            }))
+          })}
+        </div>
+      `;
+      bindTreeNodes();
+    }
+
+    function renderMid(category, mid) {
+      view.innerHTML = `
+        <div class="fade-enter">
+          <div class="view-head">
+            <div class="view-kicker">Level 3</div>
+            <h2 class="view-title">${mid.title}</h2>
+            <p class="view-copy">${mid.summary}</p>
+          </div>
+          ${renderTreeStage({
+            title: `${mid.title} 小类树`,
+            meta: `1 个中类 -> ${mid.smalls.length} 个小类`,
+            root: { id: mid.id, title: mid.title, meta: category.title, tone: category.tone },
+            children: mid.smalls.map((small, index) => ({
+              id: `small-${index}`,
+              title: small.title,
+              meta: `${small.paths.length} 路径`,
+              note: small.paths[0] || "",
+              tone: category.tone,
+              action: "small"
+            }))
+          })}
+          <section class="small-detail-panel" aria-label="小类路径明细">
+            ${mid.smalls.map(small => `
+              <div class="small-detail-row">
+                <div class="small-detail-title">${small.title}</div>
+                <div class="small-detail-paths">
+                  ${small.paths.map(path => `<span class="path-chip">${path}</span>`).join("")}
+                </div>
+              </div>
+            `).join("")}
+          </section>
+        </div>
+      `;
+    }
+
+    function renderTreeStage({ title, meta, root, children }) {
+      const narrow = window.matchMedia("(max-width: 680px)").matches;
+      const width = narrow ? 360 : 940;
+      const height = narrow ? Math.max(390, 126 + children.length * 62) : Math.max(500, 122 + children.length * 64);
+      const rootX = narrow ? 72 : 170;
+      const rootY = height / 2;
+      const childX = narrow ? 190 : width - 330;
+      const step = children.length > 1 ? Math.min(narrow ? 58 : 74, (height - 130) / (children.length - 1)) : 0;
+      const firstY = children.length > 1 ? rootY - ((children.length - 1) * step) / 2 : rootY;
+      const nodes = [
+        { ...root, x: rootX, y: rootY, root: true },
+        ...children.map((child, index) => ({
+          ...child,
+          x: childX,
+          y: firstY + index * step,
+          index
+        }))
+      ];
+      const links = children.map((child, index) => {
+        const y = firstY + index * step;
+        const midX = rootX + (childX - rootX) * .52;
+        return `<path class="tree-link" style="animation-delay:${index * 28}ms" d="M ${rootX + 14} ${rootY} C ${midX} ${rootY}, ${midX} ${y}, ${childX - 14} ${y}" />`;
+      }).join("");
+
+      return `
+        <section class="tree-stage">
+          <div class="tree-toolbar">
+            <strong>${title}</strong>
+            <span>${meta}</span>
+          </div>
+          <div class="tree-wrap">
+            <svg class="tree-svg" style="height:${height}px" viewBox="0 0 ${width} ${height}" role="img" aria-label="${title}">
+              <g>${links}</g>
+              <g>
+                ${nodes.map((node, index) => renderTreeNode(node, index)).join("")}
+              </g>
+            </svg>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderTreeNode(node, index) {
+      const classes = `tree-node tree-node-enter ${node.root ? "root" : ""}`;
+      const actionAttrs = node.action && node.action !== "small"
+        ? `data-tree-action="${node.action}" data-tree-id="${node.id}"`
+        : "";
+      const note = node.note ? truncateText(node.note, node.action === "small" ? 62 : 74) : "";
+      const textX = node.root ? -18 : 20;
+      const anchor = node.root ? "end" : "start";
+      const metaY = note ? 20 : 18;
+      const pathY = note ? 38 : 0;
+      const hitX = node.root ? -250 : -18;
+      const hitWidth = node.root ? 270 : 360;
+      return `
+        <g tabindex="${node.action === "small" ? "-1" : "0"}" class="${classes}" data-tone="${node.tone || "blue"}" transform="translate(${node.x} ${node.y})" style="animation-delay:${Math.min(index * 34, 220)}ms" ${actionAttrs}>
+          <rect class="tree-hit" x="${hitX}" y="-25" width="${hitWidth}" height="56" rx="10"></rect>
+          <circle r="${node.root ? 13 : 9}"></circle>
+          <text class="tree-node-label" x="${textX}" y="-6" text-anchor="${anchor}">${escapeHtml(node.title)}</text>
+          <text class="tree-node-meta" x="${textX}" y="${metaY}" text-anchor="${anchor}">${escapeHtml(node.meta || "")}</text>
+          ${note ? `<text class="tree-node-path" x="${textX}" y="${pathY}" text-anchor="${anchor}">${escapeHtml(note)}</text>` : ""}
+        </g>
+      `;
+    }
+
+    function bindTreeNodes() {
+      view.querySelectorAll("[data-tree-action]").forEach(node => {
+        bindEnter(node, () => {
+          const action = node.dataset.treeAction;
+          const id = node.dataset.treeId;
+          if (action === "category") enterCategory(id);
+          if (action === "mid") enterMid(state.categoryId, id);
+        });
+      });
+    }
+
+    function truncateText(text, max) {
+      return text.length > max ? `${text.slice(0, max - 1)}...` : text;
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    function bindEnter(element, callback) {
+      element.addEventListener("click", callback);
+      element.addEventListener("keydown", event => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          callback();
+        }
+      });
+    }
+
+    function enterRoot() {
+      state.level = "root";
+      state.categoryId = null;
+      state.midId = null;
+      render();
+    }
+
+    function enterCategory(categoryId) {
+      if (!categoryId) return;
+      state.level = "category";
+      state.categoryId = categoryId;
+      state.midId = null;
+      render();
+    }
+
+    function enterMid(categoryId, midId) {
+      state.level = "mid";
+      state.categoryId = categoryId;
+      state.midId = midId;
+      render();
+    }
+
+    function render() {
+      const category = categoryById(state.categoryId);
+      const mid = midById(category, state.midId);
+      renderCrumbs();
+      renderSideNav();
+      if (state.level === "mid" && category && mid) {
+        renderMid(category, mid);
+      } else if (state.level === "category" && category) {
+        renderCategory(category);
+      } else {
+        renderRoot();
+      }
+      updateScene();
+    }
+
+    resetBtn.addEventListener("click", enterRoot);
+    inventoryBtn.addEventListener("click", () => {
+      window.location.href = "agent-code-inventory-2026-06-29.md";
+    });
+    let lastNarrowLayout = window.matchMedia("(max-width: 680px)").matches;
+
+    const canvas = document.querySelector("#tree-canvas");
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, preserveDrawingBuffer: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
+    camera.position.set(0, 0, 15);
+
+    const group = new THREE.Group();
+    scene.add(group);
+
+    const palette = {
+      blue: new THREE.Color("#79bcff"),
+      green: new THREE.Color("#32d17d"),
+      orange: new THREE.Color("#ff9142"),
+      purple: new THREE.Color("#bd8cff"),
+      muted: new THREE.Color("#726e68")
+    };
+
+    const nodes = [];
+    const lines = [];
+    let targets = [];
+
+    function makeNode(size, color) {
+      const geometry = new THREE.SphereGeometry(size, 24, 16);
+      const material = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: .78 });
+      const mesh = new THREE.Mesh(geometry, material);
+      group.add(mesh);
+      nodes.push(mesh);
+      return mesh;
+    }
+
+    function makeLine(color) {
+      const geometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+      const material = new THREE.LineBasicMaterial({ color, transparent: true, opacity: .28 });
+      const line = new THREE.Line(geometry, material);
+      group.add(line);
+      lines.push(line);
+      return line;
+    }
+
+    for (let i = 0; i < 28; i += 1) {
+      makeNode(i === 0 ? .14 : .075, palette.muted);
+      if (i > 0) makeLine(palette.muted);
+    }
+
+    function levelItems() {
+      if (state.level === "mid") {
+        const category = categoryById(state.categoryId);
+        const mid = midById(category, state.midId);
+        return {
+          tone: category?.tone || "blue",
+          count: Math.min(24, Math.max(6, mid?.smalls.length || 6)),
+          radius: 5.6
+        };
+      }
+      if (state.level === "category") {
+        const category = categoryById(state.categoryId);
+        return {
+          tone: category?.tone || "blue",
+          count: Math.min(24, Math.max(7, category?.mids.length || 7)),
+          radius: 5
+        };
+      }
+      return { tone: "blue", count: 12, radius: 4.4 };
+    }
+
+    function updateScene() {
+      const spec = levelItems();
+      const color = palette[spec.tone] || palette.blue;
+      targets = [];
+      targets.push({ x: 0, y: 0, z: 0, visible: true, color });
+      for (let i = 1; i < nodes.length; i += 1) {
+        const visible = i <= spec.count;
+        const angle = ((i - 1) / Math.max(spec.count, 1)) * Math.PI * 2;
+        const wave = Math.sin(i * 1.7 + spec.count) * .65;
+        targets.push({
+          x: Math.cos(angle) * (spec.radius + wave),
+          y: Math.sin(angle) * (spec.radius * .62 + wave * .22),
+          z: Math.sin(angle * 2.1) * 1.15,
+          visible,
+          color
+        });
+      }
+      nodes.forEach((node, index) => {
+        node.material.color.copy(index === 0 ? color : color.clone().lerp(palette.muted, .22));
+      });
+      lines.forEach(line => line.material.color.copy(color));
+    }
+
+    function resize() {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      const nextNarrowLayout = window.matchMedia("(max-width: 680px)").matches;
+      if (nextNarrowLayout !== lastNarrowLayout) {
+        lastNarrowLayout = nextNarrowLayout;
+        render();
+      }
+    }
+
+    function animate(time) {
+      const t = time * .001;
+      nodes.forEach((node, index) => {
+        const target = targets[index] || { x: 0, y: 0, z: 0, visible: false };
+        node.position.x += (target.x - node.position.x) * .045;
+        node.position.y += (target.y - node.position.y) * .045;
+        node.position.z += (target.z - node.position.z) * .045;
+        node.material.opacity += ((target.visible ? (index === 0 ? .82 : .66) : 0) - node.material.opacity) * .05;
+        node.scale.setScalar((target.visible ? 1 : .2) + Math.sin(t * 1.8 + index) * .025);
+      });
+
+      lines.forEach((line, index) => {
+        const child = nodes[index + 1];
+        const root = nodes[0];
+        const visible = (targets[index + 1]?.visible ?? false);
+        line.material.opacity += ((visible ? .22 : 0) - line.material.opacity) * .05;
+        const positions = line.geometry.attributes.position;
+        positions.setXYZ(0, root.position.x, root.position.y, root.position.z);
+        positions.setXYZ(1, child.position.x, child.position.y, child.position.z);
+        positions.needsUpdate = true;
+      });
+
+      group.rotation.z = Math.sin(t * .12) * .035;
+      group.rotation.y = Math.sin(t * .16) * .08;
+      renderer.render(scene, camera);
+      requestAnimationFrame(animate);
+    }
+
+    window.addEventListener("resize", resize);
+    resize();
+    render();
+    requestAnimationFrame(animate);
+  </script>
+</body>
+</html>

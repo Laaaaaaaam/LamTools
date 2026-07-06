@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>网页计数器</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+            overflow: hidden;
+        }
+
+        /* 背景动态粒子 */
+        .particles {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .particle {
+            position: absolute;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.08);
+            animation: float linear infinite;
+        }
+
+        @keyframes float {
+            0% {
+                transform: translateY(100vh) scale(0);
+                opacity: 0;
+            }
+            10% {
+                opacity: 1;
+            }
+            90% {
+                opacity: 1;
+            }
+            100% {
+                transform: translateY(-10vh) scale(1);
+                opacity: 0;
+            }
+        }
+
+        .container {
+            position: relative;
+            z-index: 1;
+            text-align: center;
+            padding: 60px 50px;
+            border-radius: 24px;
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 25px 60px rgba(0, 0, 0, 0.3);
+            transition: transform 0.3s ease;
+        }
+
+        .container:hover {
+            transform: translateY(-4px);
+        }
+
+        h1 {
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 18px;
+            font-weight: 400;
+            letter-spacing: 6px;
+            text-transform: uppercase;
+            margin-bottom: 30px;
+        }
+
+        /* 计数器显示 */
+        .counter-display {
+            position: relative;
+            margin: 20px auto 40px;
+            min-width: 280px;
+            padding: 20px 40px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .counter-value {
+            font-size: 96px;
+            font-weight: 700;
+            color: #fff;
+            line-height: 1.1;
+            transition: transform 0.15s ease, color 0.3s ease;
+            user-select: none;
+        }
+
+        .counter-value.bump-up {
+            transform: scale(1.15);
+            color: #6ee7b7;
+        }
+
+        .counter-value.bump-down {
+            transform: scale(1.15);
+            color: #fca5a5;
+        }
+
+        .counter-value.bump-reset {
+            transform: scale(1.15);
+            color: #fde68a;
+        }
+
+        /* 步长控制 */
+        .step-control {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 14px;
+            margin-bottom: 30px;
+            color: rgba(255, 255, 255, 0.5);
+            font-size: 14px;
+        }
+
+        .step-control label {
+            letter-spacing: 2px;
+        }
+
+        .step-input {
+            width: 70px;
+            padding: 6px 10px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            background: rgba(255, 255, 255, 0.08);
+            color: #fff;
+            font-size: 16px;
+            text-align: center;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        .step-input:focus {
+            border-color: rgba(110, 231, 183, 0.6);
+        }
+
+        /* 按钮组 */
+        .btn-group {
+            display: flex;
+            gap: 16px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 14px 32px;
+            border: none;
+            border-radius: 12px;
+            font-size: 18px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            position: relative;
+            overflow: hidden;
+            letter-spacing: 1px;
+        }
+
+        .btn::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.2);
+            transform: translate(-50%, -50%);
+            transition: width 0.4s, height 0.4s;
+        }
+
+        .btn:active::after {
+            width: 300px;
+            height: 300px;
+        }
+
+        .btn-increment {
+            background: linear-gradient(135deg, #10b981, #059669);
+            color: #fff;
+            box-shadow: 0 4px 20px rgba(16, 185, 129, 0.3);
+        }
+
+        .btn-increment:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px rgba(16, 185, 129, 0.4);
+        }
+
+        .btn-decrement {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            color: #fff;
+            box-shadow: 0 4px 20px rgba(239, 68, 68, 0.3);
+        }
+
+        .btn-decrement:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px rgba(239, 68, 68, 0.4);
+        }
+
+        .btn-reset {
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            color: #fff;
+            box-shadow: 0 4px 20px rgba(245, 158, 11, 0.3);
+        }
+
+        .btn-reset:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px rgba(245, 158, 11, 0.4);
+        }
+
+        /* 历史记录 */
+        .history-section {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .history-title {
+            color: rgba(255, 255, 255, 0.4);
+            font-size: 12px;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            margin-bottom: 10px;
+        }
+
+        .history-list {
+            display: flex;
+            gap: 6px;
+            justify-content: center;
+            flex-wrap: wrap;
+            max-height: 60px;
+            overflow: hidden;
+        }
+
+        .history-item {
+            padding: 3px 10px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .history-item.positive {
+            background: rgba(16, 185, 129, 0.15);
+            color: #6ee7b7;
+        }
+
+        .history-item.negative {
+            background: rgba(239, 68, 68, 0.15);
+            color: #fca5a5;
+        }
+
+        .history-item.zero {
+            background: rgba(245, 158, 11, 0.15);
+            color: #fde68a;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(-8px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* 快捷键提示 */
+        .shortcut-hint {
+            margin-top: 20px;
+            color: rgba(255, 255, 255, 0.2);
+            font-size: 11px;
+            letter-spacing: 1px;
+        }
+
+        .shortcut-hint kbd {
+            display: inline-block;
+            padding: 2px 7px;
+            border-radius: 4px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            font-family: inherit;
+            font-size: 11px;
+            margin: 0 2px;
+        }
+
+        /* 响应式 */
+        @media (max-width: 480px) {
+            .container {
+                padding: 40px 24px;
+                margin: 16px;
+            }
+
+            .counter-value {
+                font-size: 64px;
+            }
+
+            .btn {
+                padding: 12px 24px;
+                font-size: 16px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- 背景粒子 -->
+    <div class="particles" id="particles"></div>
+
+    <div class="container">
+        <h1>网 页 计 数 器</h1>
+
+        <div class="counter-display">
+            <div class="counter-value" id="counterValue">0</div>
+        </div>
+
+        <div class="step-control">
+            <label>步长</label>
+            <input type="number" class="step-input" id="stepInput" value="1" min="1" max="1000">
+        </div>
+
+        <div class="btn-group">
+            <button class="btn btn-decrement" id="btnDecrement" title="减少 (↓)">− 减少</button>
+            <button class="btn btn-reset" id="btnReset" title="重置 (R)">↺ 重置</button>
+            <button class="btn btn-increment" id="btnIncrement" title="增加 (↑)">+ 增加</button>
+        </div>
+
+        <div class="history-section">
+            <div class="history-title">操作记录</div>
+            <div class="history-list" id="historyList"></div>
+        </div>
+
+        <div class="shortcut-hint">
+            <kbd>↑</kbd> 增加 &nbsp; <kbd>↓</kbd> 减少 &nbsp; <kbd>R</kbd> 重置
+        </div>
+    </div>
+
+    <script>
+        // ======== 状态 ========
+        let count = 0;
+        let step = 1;
+        const history = [];
+
+        // ======== DOM ========
+        const counterValue = document.getElementById('counterValue');
+        const stepInput = document.getElementById('stepInput');
+        const btnIncrement = document.getElementById('btnIncrement');
+        const btnDecrement = document.getElementById('btnDecrement');
+        const btnReset = document.getElementById('btnReset');
+        const historyList = document.getElementById('historyList');
+
+        // ======== 从 localStorage 恢复 ========
+        const saved = localStorage.getItem('web_counter_data');
+        if (saved) {
+            try {
+                const data = JSON.parse(saved);
+                count = data.count || 0;
+                step = data.step || 1;
+                stepInput.value = step;
+                updateDisplay(false);
+            } catch (e) {}
+        }
+
+        // ======== 核心函数 ========
+        function updateDisplay(animate = true) {
+            counterValue.textContent = count.toLocaleString();
+            saveState();
+        }
+
+        function saveState() {
+            localStorage.setItem('web_counter_data', JSON.stringify({ count, step }));
+        }
+
+        function animateBump(type) {
+            counterValue.classList.remove('bump-up', 'bump-down', 'bump-reset');
+            // 强制 reflow
+            void counterValue.offsetWidth;
+            counterValue.classList.add(`bump-${type}`);
+            setTimeout(() => {
+                counterValue.classList.remove(`bump-${type}`);
+            }, 200);
+        }
+
+        function addHistory(value) {
+            history.unshift(value);
+            if (history.length > 20) history.pop();
+            renderHistory();
+        }
+
+        function renderHistory() {
+            historyList.innerHTML = '';
+            history.slice(0, 12).forEach(val => {
+                const span = document.createElement('span');
+                span.className = 'history-item ' + (val > 0 ? 'positive' : val < 0 ? 'negative' : 'zero');
+                span.textContent = (val > 0 ? '+' : '') + val;
+                historyList.appendChild(span);
+            });
+        }
+
+        // ======== 操作 ========
+        function increment() {
+            step = parseInt(stepInput.value) || 1;
+            count += step;
+            updateDisplay();
+            animateBump('up');
+            addHistory(step);
+        }
+
+        function decrement() {
+            step = parseInt(stepInput.value) || 1;
+            count -= step;
+            updateDisplay();
+            animateBump('down');
+            addHistory(-step);
+        }
+
+        function reset() {
+            const prev = count;
+            count = 0;
+            updateDisplay();
+            animateBump('reset');
+            if (prev !== 0) addHistory(0);
+        }
+
+        // ======== 事件绑定 ========
+        btnIncrement.addEventListener('click', increment);
+        btnDecrement.addEventListener('click', decrement);
+        btnReset.addEventListener('click', reset);
+
+        // 键盘快捷键
+        document.addEventListener('keydown', (e) => {
+            if (e.target === stepInput) return; // 输入框内不触发
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                increment();
+            } else if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                decrement();
+            } else if (e.key === 'r' || e.key === 'R') {
+                e.preventDefault();
+                reset();
+            }
+        });
+
+        // 步长输入校验
+        stepInput.addEventListener('change', () => {
+            let v = parseInt(stepInput.value);
+            if (isNaN(v) || v < 1) v = 1;
+            if (v > 1000) v = 1000;
+            stepInput.value = v;
+            step = v;
+            saveState();
+        });
+
+        // ======== 背景粒子生成 ========
+        (function createParticles() {
+            const container = document.getElementById('particles');
+            const count = 30;
+            for (let i = 0; i < count; i++) {
+                const p = document.createElement('div');
+                p.className = 'particle';
+                const size = Math.random() * 6 + 2;
+                p.style.width = size + 'px';
+                p.style.height = size + 'px';
+                p.style.left = Math.random() * 100 + '%';
+                p.style.animationDuration = Math.random() * 12 + 8 + 's';
+                p.style.animationDelay = Math.random() * 10 + 's';
+                container.appendChild(p);
+            }
+        })();
+    </script>
+</body>
+</html>

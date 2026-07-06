@@ -1,0 +1,57 @@
+# Build outputs
+node_modules/
+dist/
+build/
+release/
+.pytest_cache/
+test/
+members/writer/frontend/.vite/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+ENV/
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Database
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Local / debug
+.obsidian/
+.omo/
+.reasonix/
+reasonix.toml
+.codegraph/
+opencode*.log
+.archives/
+.codex-runtime/
+.writer-artifacts/
+tmp/
+
+# Desktop build outputs
+members/writer/frontend/src-tauri/target/
+members/writer/frontend/src-tauri/gen/
+members/writer/frontend/.electron-app-stage/

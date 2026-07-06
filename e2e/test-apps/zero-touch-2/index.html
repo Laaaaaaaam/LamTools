@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>待办事项</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app" class="app">
+    <!-- 头部 -->
+    <header class="header">
+      <h1 class="header__title">📋 待办事项</h1>
+      <p class="header__subtitle" id="dateDisplay"></p>
+    </header>
+
+    <!-- 输入区域 -->
+    <section class="input-section">
+      <form id="todoForm" class="todo-form" autocomplete="off">
+        <input
+          id="todoInput"
+          class="todo-form__input"
+          type="text"
+          placeholder="添加新的待办事项..."
+          maxlength="200"
+          autofocus
+        >
+        <button id="addBtn" class="todo-form__btn" type="submit" title="添加">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </form>
+      <div id="errorMsg" class="error-msg" role="alert"></div>
+    </section>
+
+    <!-- 筛选栏 -->
+    <nav class="filter-bar" id="filterBar">
+      <button class="filter-btn active" data-filter="all">全部</button>
+      <button class="filter-btn" data-filter="active">未完成</button>
+      <button class="filter-btn" data-filter="completed">已完成</button>
+    </nav>
+
+    <!-- 待办列表 -->
+    <main class="todo-list" id="todoList">
+      <!-- 由 JS 动态渲染 -->
+    </main>
+
+    <!-- 空状态 -->
+    <div class="empty-state" id="emptyState" style="display:none;">
+      <svg class="empty-state__icon" width="64" height="64" viewBox="0 0 64 64" fill="none">
+        <rect x="12" y="8" width="40" height="48" rx="4" stroke="currentColor" stroke-width="2.5"/>
+        <path d="M22 24h20M22 32h20M22 40h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <p class="empty-state__text" id="emptyText">暂无待办事项</p>
+    </div>
+
+    <!-- 底部统计栏 -->
+    <footer class="footer" id="footer" style="display:none;">
+      <span class="footer__count" id="itemCount"></span>
+      <button class="footer__clear-btn" id="clearCompletedBtn">清除已完成</button>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

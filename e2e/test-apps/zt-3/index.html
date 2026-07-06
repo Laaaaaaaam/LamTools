@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>点击计数器</title>
+  <style>
+    :root {
+      --bg-primary: #0f0c29;
+      --bg-secondary: #302b63;
+      --bg-accent: #24243e;
+      --text-primary: #ffffff;
+      --text-secondary: #a8a4ce;
+      --accent: #6c63ff;
+      --accent-glow: rgba(108, 99, 255, 0.4);
+      --danger: #ff4757;
+      --danger-glow: rgba(255, 71, 87, 0.4);
+      --card-bg: rgba(255, 255, 255, 0.05);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --ripple-color: rgba(108, 99, 255, 0.3);
+      --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.3);
+      --radius-sm: 12px;
+      --radius-md: 20px;
+      --radius-lg: 30px;
+      --transition-fast: 0.2s ease;
+      --transition-normal: 0.3s ease;
+    }
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 50%, var(--bg-accent) 100%);
+      color: var(--text-primary);
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+    .bg-orbs { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; overflow: hidden; }
+    .bg-orbs .orb { position: absolute; border-radius: 50%; filter: blur(80px); opacity: 0.15; animation: float 20s infinite ease-in-out; }
+    .bg-orbs .orb:nth-child(1) { width: 400px; height: 400px; background: var(--accent); top: -100px; left: -100px; animation-duration: 18s; }
+    .bg-orbs .orb:nth-child(2) { width: 350px; height: 350px; background: #ff6b9d; bottom: -80px; right: -80px; animation-duration: 22s; animation-delay: -5s; }
+    .bg-orbs .orb:nth-child(3) { width: 250px; height: 250px; background: #00d2ff; top: 50%; left: 60%; animation-duration: 25s; animation-delay: -10s; }
+    @keyframes float {
+      0%, 100% { transform: translate(0, 0) scale(1); }
+      25% { transform: translate(50px, -30px) scale(1.05); }
+      50% { transform: translate(-20px, 40px) scale(0.95); }
+      75% { transform: translate(30px, 20px) scale(1.02); }
+    }
+    .container { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; gap: 32px; padding: 24px; width: 100%; max-width: 480px; }
+    .title { font-size: 1.1rem; font-weight: 500; letter-spacing: 4px; text-transform: uppercase; color: var(--text-secondary); text-align: center; }
+    .counter-card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--radius-lg); padding: 48px 40px; display: flex; flex-direction: column; align-items: center; gap: 40px; backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); box-shadow: var(--shadow-lg); width: 100%; }
+    .count-display { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+    .count-number { font-size: 6rem; font-weight: 800; line-height: 1; background: linear-gradient(135deg, #fff 0%, #c4b5fd 50%, var(--accent) 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; transition: transform var(--transition-fast); user-select: none; }
+    .count-number.pop { animation: pop 0.3s ease; }
+    @keyframes pop { 0% { transform: scale(1); } 40% { transform: scale(1.2); } 70% { transform: scale(0.95); } 100% { transform: scale(1); } }
+    .count-label { font-size: 0.85rem; color: var(--text-secondary); letter-spacing: 2px; text-transform: uppercase; }
+    .click-btn { position: relative; width: 160px; height: 160px; border-radius: 50%; border: none; cursor: pointer; background: linear-gradient(135deg, var(--accent) 0%, #8b5cf6 100%); color: white; font-size: 1rem; font-weight: 600; letter-spacing: 1px; display: flex; align-items: center; justify-content: center; box-shadow: 0 8px 30px var(--accent-glow); transition: transform var(--transition-fast), box-shadow var(--transition-fast); overflow: hidden; outline: none; -webkit-tap-highlight-color: transparent; }
+    .click-btn:hover { transform: scale(1.05); box-shadow: 0 12px 40px var(--accent-glow); }
+    .click-btn:active { transform: scale(0.95); }
+    .click-btn:focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; }
+    .click-btn .btn-text { position: relative; z-index: 2; pointer-events: none; }
+    .click-btn .ripple { position: absolute; border-radius: 50%; background: var(--ripple-color); transform: scale(0); animation: ripple 0.6s ease-out; pointer-events: none; }
+    @keyframes ripple { to { transform: scale(4); opacity: 0; } }
+    .click-btn::after { content: ''; position: absolute; width: 100%; height: 100%; border-radius: 50%; border: 2px solid var(--accent); opacity: 0; top: 0; left: 0; }
+    .click-btn.pulse::after { animation: pulse-ring 0.5s ease-out; }
+    @keyframes pulse-ring { 0% { transform: scale(1); opacity: 0.6; } 100% { transform: scale(1.5); opacity: 0; } }
+    .actions { display: flex; gap: 16px; width: 100%; }
+    .action-btn { flex: 1; padding: 14px 20px; border-radius: var(--radius-sm); border: 1px solid var(--card-border); background: var(--card-bg); color: var(--text-secondary); font-size: 0.9rem; font-weight: 500; cursor: pointer; transition: all var(--transition-fast); backdrop-filter: blur(10px); outline: none; -webkit-tap-highlight-color: transparent; }
+    .action-btn:hover { background: rgba(255, 255, 255, 0.1); color: var(--text-primary); border-color: rgba(255, 255, 255, 0.15); }
+    .action-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .action-btn.reset { transition: all var(--transition-normal); }
+    .action-btn.reset.confirming { background: rgba(255, 71, 87, 0.15); border-color: var(--danger); color: var(--danger); animation: shake 0.4s ease; box-shadow: 0 0 20px var(--danger-glow); }
+    @keyframes shake { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-4px); } 40% { transform: translateX(4px); } 60% { transform: translateX(-3px); } 80% { transform: translateX(3px); } }
+    .stats-bar { display: flex; justify-content: center; gap: 32px; width: 100%; padding: 16px 24px; background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--radius-md); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+    .stat-item { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+    .stat-value { font-size: 1.1rem; font-weight: 700; color: var(--text-primary); }
+    .stat-label { font-size: 0.7rem; color: var(--text-secondary); letter-spacing: 1px; text-transform: uppercase; }
+    .toast { position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%) translateY(100px); background: rgba(255, 255, 255, 0.1); border: 1px solid var(--card-border); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); color: var(--text-primary); padding: 12px 24px; border-radius: var(--radius-sm); font-size: 0.85rem; font-weight: 500; opacity: 0; transition: all 0.4s ease; z-index: 100; pointer-events: none; }
+    .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+    @media (prefers-reduced-motion: reduce) {
+      .bg-orbs .orb, .count-number.pop, .click-btn .ripple, .click-btn.pulse::after, .action-btn.reset.confirming { animation: none; }
+      .click-btn, .action-btn, .count-number { transition-duration: 0.01s; }
+    }
+    @media (max-width: 480px) {
+      .container { padding: 16px; gap: 24px; }
+      .counter-card { padding: 32px 24px; gap: 32px; }
+      .count-number { font-size: 4.5rem; }
+      .click-btn { width: 130px; height: 130px; font-size: 0.9rem; }
+      .stats-bar { gap: 20px; padding: 12px 16px; }
+    }
+    @media (max-width: 360px) {
+      .count-number { font-size: 3.5rem; }
+      .click-btn { width: 110px; height: 110px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="bg-orbs" aria-hidden="true">
+    <div class="orb"></div><div class="orb"></div><div class="orb"></div>
+  </div>
+  <main class="container">
+    <h1 class="title">Click Counter</h1>
+    <section class="counter-card">
+      <div class="count-display">
+        <div class="count-number" id="countNumber" aria-live="polite" aria-atomic="true">0</div>
+        <div class="count-label">次点击</div>
+      </div>
+      <button class="click-btn" id="clickBtn" aria-label="点击计数">
+        <span class="btn-text">点 击</span>
+      </button>
+      <div class="actions">
+        <button class="action-btn reset" id="resetBtn" aria-label="重置计数器">重置</button>
+        <button class="action-btn" id="stepBtn" aria-label="步进模式切换">步进: +1</button>
+      </div>
+    </section>
+    <section class="stats-bar" aria-label="统计信息">
+      <div class="stat-item"><span class="stat-value" id="sessionCount">0</span><span class="stat-label">本次会话</span></div>
+      <div class="stat-item"><span class="stat-value" id="stepSize">1</span><span class="stat-label">步进值</span></div>
+      <div class="stat-item"><span class="stat-value" id="peakCount">0</span><span class="stat-label">历史峰值</span></div>
+    </section>
+  </main>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+  (function() {
+    'use strict';
+
+    // ========== CounterCore ==========
+    var STORAGE_KEY = 'click_counter_data';
+    var state = { count: 0, peak: 0 };
+
+    function loadState() {
+      try {
+        var raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return;
+        var parsed = JSON.parse(raw);
+        if (typeof parsed.count === 'number' && Number.isInteger(parsed.count) && parsed.count >= 0) {
+          state.count = parsed.count;
+          state.peak = (typeof parsed.peak === 'number' && Number.isInteger(parsed.peak) && parsed.peak >= 0)
+            ? parsed.peak : parsed.count;
+        }
+      } catch (e) {
+        state = { count: 0, peak: 0 };
+      }
+    }
+
+    function saveState() {
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) { /* noop */ }
+    }
+
+    var _dt = null;
+    function saveDebounced(d) {
+      d = d || 300;
+      if (_dt) clearTimeout(_dt);
+      _dt = setTimeout(function() { saveState(); _dt = null; }, d);
+    }
+
+    // ========== DOM refs (lazy) ==========
+    var els = null;
+    var sessionClicks = 0;
+    var resetConfirming = false;
+    var resetTimer = null;
+    var step = 1;
+    var STEPS = [1, 5, 10, 50, 100];
+    var stepIndex = 0;
+    var toastTimer = null;
+
+    function $(id) { return document.getElementById(id); }
+
+    function init() {
+      loadState();
+      els = {
+        countNumber: $('countNumber'),
+        clickBtn: $('clickBtn'),
+        resetBtn: $('resetBtn'),
+        stepBtn: $('stepBtn'),
+        sessionCount: $('sessionCount'),
+        stepSize: $('stepSize'),
+        peakCount: $('peakCount'),
+        toast: $('toast')
+      };
+      els.countNumber.addEventListener('animationend', function() {
+        els.countNumber.classList.remove('pop');
+      });
+      renderCount(state.count);
+      renderPeak();
+      els.stepSize.textContent = step;
+      bindEvents();
+    }
+
+    function renderCount(c) {
+      els.countNumber.textContent = c.toLocaleString();
+      els.countNumber.classList.remove('pop');
+      void els.countNumber.offsetWidth;
+      els.countNumber.classList.add('pop');
+    }
+
+    function renderPeak() {
+      els.peakCount.textContent = state.peak.toLocaleString();
+    }
+
+    function createRipple(e) {
+      var rect = els.clickBtn.getBoundingClientRect();
+      var ripple = document.createElement('span');
+      ripple.classList.add('ripple');
+      var size = Math.max(rect.width, rect.height);
+      ripple.style.width = size + 'px';
+      ripple.style.height = size + 'px';
+      var x = (e.clientX || rect.left + rect.width / 2) - rect.left - size / 2;
+      var y = (e.clientY || rect.top + rect.height / 2) - rect.top - size / 2;
+      ripple.style.left = x + 'px';
+      ripple.style.top = y + 'px';
+      els.clickBtn.appendChild(ripple);
+      ripple.addEventListener('animationend', function() { ripple.remove(); });
+    }
+
+    function triggerPulse() {
+      els.clickBtn.classList.remove('pulse');
+      void els.clickBtn.offsetWidth;
+      els.clickBtn.classList.add('pulse');
+    }
+
+    function setResetConfirming(on) {
+      if (on) {
+        els.resetBtn.classList.add('confirming');
+        els.resetBtn.textContent = '确认重置？';
+      } else {
+        els.resetBtn.classList.remove('confirming');
+        els.resetBtn.textContent = '重置';
+      }
+    }
+
+    function showToast(msg, dur) {
+      dur = dur || 2000;
+      if (toastTimer) clearTimeout(toastTimer);
+      els.toast.textContent = msg;
+      els.toast.classList.add('show');
+      toastTimer = setTimeout(function() {
+        els.toast.classList.remove('show');
+        toastTimer = null;
+      }, dur);
+    }
+
+    function cancelResetConfirm() {
+      if (resetTimer) clearTimeout(resetTimer);
+      resetTimer = null;
+      resetConfirming = false;
+      setResetConfirming(false);
+    }
+
+    function handleClick(e) {
+      state.count += step;
+      if (state.count > state.peak) state.peak = state.count;
+      renderCount(state.count);
+      createRipple(e);
+      triggerPulse();
+      sessionClicks++;
+      els.sessionCount.textContent = sessionClicks;
+      els.stepSize.textContent = step;
+      renderPeak();
+      saveDebounced();
+      if (resetConfirming) cancelResetConfirm();
+    }
+
+    function handleReset() {
+      if (resetConfirming) {
+        if (resetTimer) clearTimeout(resetTimer);
+        resetConfirming = false;
+        setResetConfirming(false);
+        state.count = 0;
+        saveState();
+        renderCount(0);
+        showToast('计数器已重置');
+      } else {
+        resetConfirming = true;
+        setResetConfirming(true);
+        resetTimer = setTimeout(cancelResetConfirm, 3000);
+      }
+    }
+
+    function handleStep() {
+      stepIndex = (stepIndex + 1) % STEPS.length;
+      step = STEPS[stepIndex];
+      els.stepBtn.textContent = '步进: +' + step;
+      els.stepSize.textContent = step;
+      showToast('步进值切换为 +' + step);
+      if (resetConfirming) cancelResetConfirm();
+    }
+
+    function handleKeydown(e) {
+      if (e.key === 'Escape' && resetConfirming) cancelResetConfirm();
+    }
+
+    function handleDocClick(e) {
+      if (resetConfirming && e.target !== els.resetBtn && !els.resetBtn.contains(e.target)) {
+        cancelResetConfirm();
+      }
+    }
+
+    function bindEvents() {
+      els.clickBtn.addEventListener('click', handleClick);
+      els.resetBtn.addEventListener('click', handleReset);
+      els.stepBtn.addEventListener('click', handleStep);
+      document.addEventListener('keydown', handleKeydown);
+      document.addEventListener('click', handleDocClick);
+    }
+
+    document.addEventListener('DOMContentLoaded', init);
+  })();
+  </script>
+</body>
+</html>

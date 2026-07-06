@@ -1,0 +1,73 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# PyInstaller
+dist/
+build/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Local environment and data
+.env
+*.db
+*.sqlite
+*.sqlite3
+*.pid
+
+# Logs and transient server output
+*.log
+*_out.txt
+*_err.txt
+*_sse.txt
+srv_*.txt
+srv_*.log
+server_*.log
+
+# LamWriter generated integration artifacts
+backend/itest_results/
+backend/itest_v*/
+backend/regression_test/
+backend/novel_output/
+backend/design_rounds/
+backend/tests/e2e_recipe_output/
+backend/tests/compaction_test/
+backend/tests/tui_e2e_test/
+backend/tests/tui_test/
+backend/phase*_sse.txt
+backend/srv_*.log
+backend/.novel_pid
+backend/lamwriter.db
+
+# Large local reference/source drops
+docs/learning files/
+.omo/
+/requirements.txt
+
+# Generated experiments / benchmark outputs
+.codex-runs/
+.playwright-mcp/
+test-results/
+video_editor*/
+book_tracker*/
+design_probes/
+design_rounds/
+eval_output/
+md_reader/
+recipe_*/
+recipe_app*/
+test_output/
+url_shortener*/
+writer_test/
+recipes.json
+urls.json
+par_*_out.txt
+plan*_out.txt
+plan*_err.txt
+design_summary.txt
+onboarding-guide.md

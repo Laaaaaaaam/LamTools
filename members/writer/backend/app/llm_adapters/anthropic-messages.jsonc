@@ -1,0 +1,19 @@
+{
+  "id": "anthropic-messages",
+  "label": "Anthropic Messages",
+  "protocol": "anthropic-messages",
+  "request": {
+    "thinking": {
+      "when_enabled": {
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": "$thinking_budget"
+        }
+      }
+    }
+  },
+  "non_stream_response": {
+    "content_blocks": "content",
+    "usage": "usage"
+  }
+}

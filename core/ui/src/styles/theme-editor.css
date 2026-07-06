@@ -1,0 +1,296 @@
+/**
+ * Theme editor CSS — live preview, preset grid, color stop editors
+ *
+ * Extracted from the shared components.css. Both products had these rules
+ * byte-identical. Used by the ThemeEditor component.
+ */
+
+.theme-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.theme-preview {
+  min-height: 132px;
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 12%, transparent);
+  border-radius: 8px;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr);
+  gap: 10px;
+  overflow: hidden;
+}
+
+.theme-preview aside,
+.theme-preview main {
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 12%, transparent);
+  border-radius: 8px;
+}
+
+.theme-preview aside {
+  padding: 12px;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  background: color-mix(in srgb, var(--settings-main-text, #fff) 5%, transparent);
+}
+
+.theme-preview main {
+  padding: 12px;
+  display: grid;
+  align-content: space-between;
+  gap: 12px;
+  box-shadow: 0 4px 12px rgba(0,0,0,.08);
+}
+
+.theme-preview strong {
+  display: block;
+  font-size: 15px;
+}
+
+.theme-preview span {
+  color: currentColor;
+  opacity: .62;
+  font-size: 12px;
+}
+
+.theme-preview main > div {
+  min-height: 34px;
+  border: 1px solid color-mix(in srgb, currentColor 13%, transparent);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.theme-preview main > button {
+  width: fit-content;
+  min-height: 30px;
+  border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  border-radius: 8px;
+  padding: 0 14px;
+  font-size: 13px;
+  text-align: left;
+}
+
+.theme-presets {
+  display: grid;
+  gap: 12px;
+}
+
+.theme-preset-group {
+  display: grid;
+  gap: 8px;
+}
+
+.theme-preset-group h4 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.theme-preset-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.theme-preset {
+  min-height: 76px;
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 10%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--settings-main-text, #fff) 5%, transparent);
+  color: var(--settings-card-text, var(--text));
+  padding: 10px;
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-content: start;
+  gap: 8px 10px;
+  text-align: left;
+}
+
+.theme-preset:hover {
+  border-color: color-mix(in srgb, var(--settings-main-text, #fff) 20%, transparent);
+  background: color-mix(in srgb, var(--settings-main-text, #fff) 8%, transparent);
+}
+
+.preset-swatch {
+  position: relative;
+  height: 54px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 13%, transparent);
+  overflow: hidden;
+  grid-row: span 2;
+}
+
+.preset-swatch i,
+.preset-swatch b {
+  position: absolute;
+  display: block;
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 16%, transparent);
+  box-shadow: 0 2px 8px rgba(0,0,0,.10);
+}
+
+.preset-swatch i {
+  inset: 7px 7px 16px 22px;
+  border-radius: 7px;
+}
+
+.preset-swatch b {
+  right: 8px;
+  bottom: 7px;
+  width: 34px;
+  height: 8px;
+  border-radius: 999px;
+}
+
+.theme-preset strong {
+  font-size: 13px;
+  align-self: end;
+}
+
+.theme-preset small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.theme-advanced {
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 10%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--settings-main-text, #fff) 4%, transparent);
+  overflow: hidden;
+}
+
+.theme-advanced > summary {
+  min-height: 44px;
+  padding: 0 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  cursor: pointer;
+  list-style: none;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.theme-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.theme-advanced > summary::after {
+  content: "+";
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.theme-advanced[open] > summary::after {
+  content: "-";
+}
+
+.theme-advanced > summary small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.theme-advanced .theme-settings-grid {
+  padding: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 8%, transparent);
+}
+
+.theme-area-card {
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 10%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--settings-main-text, #fff) 5%, transparent);
+  padding: 12px;
+  display: grid;
+  gap: 12px;
+}
+
+.theme-area-card h4 {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.gradient-stop-list {
+  display: grid;
+  gap: 8px;
+}
+
+.gradient-stop-row {
+  display: grid;
+  grid-template-columns: 22px 40px minmax(0, 1fr) 66px 38px;
+  gap: 8px;
+  align-items: center;
+}
+
+.gradient-stop-row > span {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.gradient-stop-row input[type="color"] {
+  width: 32px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  background: var(--panel-2);
+  cursor: pointer;
+}
+
+.gradient-stop-row input[type="number"] {
+  width: 100%;
+  padding: 4px 6px;
+  font-size: 12px;
+  text-align: center;
+}
+
+.field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.field > span { display: flex; align-items: center; gap: 6px; }
+.field > span em { color: var(--text); font-weight: 600; font-style: normal; }
+
+.width-field { gap: 8px; }
+.width-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 66px;
+  gap: 10px;
+  align-items: center;
+}
+.width-control input[type="range"] { width: 100%; }
+.width-control input[type="number"] {
+  width: 100%;
+  padding: 4px 6px;
+  font-size: 12px;
+  text-align: center;
+}
+
+.color-field span {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+.color-field input[type="color"] {
+  width: 32px; height: 28px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  background: var(--panel-2);
+  cursor: pointer;
+}

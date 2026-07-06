@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Quality Menu Preview</title>
+  <style>
+    :root {
+      --bg: #101111;
+      --panel: #2c2c2b;
+      --control: #3a3937;
+      --control-hover: #45433f;
+      --text: #f2efeb;
+      --muted: #a7a29b;
+      --line: #46433f;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    .composer {
+      position: relative;
+      width: min(860px, calc(100vw - 48px));
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: var(--panel);
+      box-shadow: 0 24px 90px rgba(0,0,0,.5);
+      padding: 16px;
+    }
+
+    .input-line {
+      min-height: 46px;
+      color: #817c75;
+      font-size: 18px;
+      padding: 2px 4px 12px;
+    }
+
+    .bottom {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .spacer { flex: 1; }
+
+    .round {
+      width: 34px;
+      height: 34px;
+      border: 0;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: transparent;
+      color: var(--text);
+      font-size: 20px;
+      cursor: pointer;
+    }
+
+    .pill {
+      height: 38px;
+      border: 0;
+      border-radius: 10px;
+      background: var(--control);
+      color: var(--text);
+      padding: 0 14px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 15px;
+      font-weight: 650;
+      cursor: pointer;
+    }
+
+    .pill:hover,
+    .pill.open {
+      background: var(--control-hover);
+    }
+
+    .quality-label {
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    .chev {
+      color: var(--muted);
+      font-size: 15px;
+      margin-left: 2px;
+    }
+
+    .menu {
+      position: absolute;
+      bottom: 58px;
+      width: 158px;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 12px;
+      background: #2f2e2d;
+      box-shadow: 0 18px 48px rgba(0,0,0,.38);
+      padding: 6px;
+      display: none;
+      z-index: 5;
+    }
+
+    .menu.open { display: grid; }
+
+    #modelMenu { left: 60px; width: 176px; }
+    #qualityMenu { left: 184px; width: 158px; }
+
+    .item {
+      border: 0;
+      border-radius: 8px;
+      min-height: 34px;
+      padding: 0 10px;
+      background: transparent;
+      color: #e8e3dd;
+      text-align: left;
+      font: inherit;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .item:hover {
+      background: rgba(255,255,255,.08);
+    }
+
+    .item.active {
+      background: rgba(255,255,255,.12);
+      color: var(--text);
+    }
+
+    .item span:last-child {
+      color: var(--muted);
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="composer">
+      <div class="input-line">要求后续变更</div>
+      <div class="bottom">
+        <button class="round" type="button">＋</button>
+        <button id="modelButton" class="pill" type="button">
+          <strong id="modelValue">glm5.1</strong>
+          <span class="chev">⌄</span>
+        </button>
+        <button id="qualityButton" class="pill" type="button">
+          <span class="quality-label">quality</span>
+          <strong id="qualityValue">auto</strong>
+          <span class="chev">⌄</span>
+        </button>
+        <span class="spacer"></span>
+        <button class="round" type="button">↑</button>
+      </div>
+
+      <div id="modelMenu" class="menu" role="menu">
+        <button class="item active" data-value="glm5.1"><strong>glm5.1</strong><span>默认</span></button>
+        <button class="item" data-value="astron-code"><strong>astron-code</strong><span>代码</span></button>
+        <button class="item" data-value="local"><strong>local</strong><span>本地</span></button>
+      </div>
+
+      <div id="qualityMenu" class="menu" role="menu">
+        <button class="item active" data-value="auto"><strong>auto</strong><span>默认</span></button>
+        <button class="item" data-value="toy"><strong>toy</strong><span>玩具级</span></button>
+        <button class="item" data-value="low"><strong>low</strong><span>轻量</span></button>
+        <button class="item" data-value="medium"><strong>medium</strong><span>平衡</span></button>
+        <button class="item" data-value="high"><strong>high</strong><span>高质量</span></button>
+        <button class="item" data-value="crazy"><strong>crazy</strong><span>不推荐</span></button>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    function bindMenu(buttonId, valueId, menuId) {
+      const button = document.getElementById(buttonId);
+      const value = document.getElementById(valueId);
+      const menu = document.getElementById(menuId);
+      const items = Array.from(menu.querySelectorAll(".item"));
+
+      button.addEventListener("click", () => {
+        document.querySelectorAll(".menu.open").forEach((x) => {
+          if (x !== menu) x.classList.remove("open");
+        });
+        document.querySelectorAll(".pill.open").forEach((x) => {
+          if (x !== button) x.classList.remove("open");
+        });
+        const open = !menu.classList.contains("open");
+        menu.classList.toggle("open", open);
+        button.classList.toggle("open", open);
+      });
+
+      items.forEach((item) => {
+        item.addEventListener("click", () => {
+          value.textContent = item.dataset.value;
+          items.forEach((x) => x.classList.toggle("active", x === item));
+          menu.classList.remove("open");
+          button.classList.remove("open");
+        });
+      });
+
+      return { button, menu };
+    }
+
+    const model = bindMenu("modelButton", "modelValue", "modelMenu");
+    const quality = bindMenu("qualityButton", "qualityValue", "qualityMenu");
+
+    document.addEventListener("pointerdown", (event) => {
+      if (
+        model.button.contains(event.target) || model.menu.contains(event.target) ||
+        quality.button.contains(event.target) || quality.menu.contains(event.target)
+      ) return;
+      document.querySelectorAll(".menu.open").forEach((x) => x.classList.remove("open"));
+      document.querySelectorAll(".pill.open").forEach((x) => x.classList.remove("open"));
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>计数器</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+
+        .counter-container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px 60px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            text-align: center;
+        }
+
+        .counter-title {
+            font-size: 24px;
+            color: #333;
+            margin-bottom: 20px;
+            font-weight: 600;
+        }
+
+        .counter-value {
+            font-size: 80px;
+            font-weight: 700;
+            color: #333;
+            margin: 20px 0;
+            transition: color 0.3s;
+            user-select: none;
+        }
+
+        .counter-value.positive {
+            color: #2ecc71;
+        }
+
+        .counter-value.negative {
+            color: #e74c3c;
+        }
+
+        .counter-value.zero {
+            color: #333;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 16px;
+            justify-content: center;
+            margin-top: 30px;
+        }
+
+        .btn {
+            padding: 12px 28px;
+            font-size: 18px;
+            font-weight: 600;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            user-select: none;
+        }
+
+        .btn:active {
+            transform: scale(0.95);
+        }
+
+        .btn-decrease {
+            background: #e74c3c;
+            color: white;
+        }
+
+        .btn-decrease:hover {
+            background: #c0392b;
+            box-shadow: 0 4px 15px rgba(231, 76, 60, 0.4);
+        }
+
+        .btn-reset {
+            background: #95a5a6;
+            color: white;
+        }
+
+        .btn-reset:hover {
+            background: #7f8c8d;
+            box-shadow: 0 4px 15px rgba(149, 165, 166, 0.4);
+        }
+
+        .btn-increase {
+            background: #2ecc71;
+            color: white;
+        }
+
+        .btn-increase:hover {
+            background: #27ae60;
+            box-shadow: 0 4px 15px rgba(46, 204, 113, 0.4);
+        }
+
+        .step-control {
+            margin-top: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        .step-control label {
+            font-size: 14px;
+            color: #666;
+        }
+
+        .step-input {
+            width: 60px;
+            padding: 6px 10px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            text-align: center;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        .step-input:focus {
+            border-color: #667eea;
+        }
+    </style>
+</head>
+<body>
+    <div class="counter-container">
+        <div class="counter-title">计数器</div>
+        <div class="counter-value zero" id="counterValue">0</div>
+        <div class="button-group">
+            <button class="btn btn-decrease" id="decreaseBtn">− 减少</button>
+            <button class="btn btn-reset" id="resetBtn">↺ 重置</button>
+            <button class="btn btn-increase" id="increaseBtn">+ 增加</button>
+        </div>
+        <div class="step-control">
+            <label for="stepInput">步长：</label>
+            <input type="number" class="step-input" id="stepInput" value="1" min="1">
+        </div>
+    </div>
+
+    <script>
+        let count = 0;
+        const counterEl = document.getElementById('counterValue');
+        const decreaseBtn = document.getElementById('decreaseBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const increaseBtn = document.getElementById('increaseBtn');
+        const stepInput = document.getElementById('stepInput');
+
+        function updateDisplay() {
+            counterEl.textContent = count;
+            counterEl.className = 'counter-value';
+            if (count > 0) {
+                counterEl.classList.add('positive');
+            } else if (count < 0) {
+                counterEl.classList.add('negative');
+            } else {
+                counterEl.classList.add('zero');
+            }
+        }
+
+        function getStep() {
+            const step = parseInt(stepInput.value, 10);
+            return (isNaN(step) || step < 1) ? 1 : step;
+        }
+
+        function increase() {
+            count += getStep();
+            updateDisplay();
+        }
+
+        function decrease() {
+            count -= getStep();
+            updateDisplay();
+        }
+
+        function reset() {
+            count = 0;
+            updateDisplay();
+        }
+
+        increaseBtn.addEventListener('click', increase);
+        decreaseBtn.addEventListener('click', decrease);
+        resetBtn.addEventListener('click', reset);
+
+        stepInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                e.target.blur();
+            }
+        });
+
+        updateDisplay();
+    </script>
+</body>
+</html>

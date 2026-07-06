@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Writer 显示重构 — 效果预览</title>
+<style>
+:root {
+  --bg: #121313; --panel: #1d1e1e; --line: #3b3a38;
+  --text: #f2efeb; --muted: #a7a29b;
+  --green: #32d17d; --blue: #79bcff; --orange: #ff9142;
+  --red: #ff5555;
+  font-family: Inter, system-ui, sans-serif; font-size: 14px;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); min-height: 100vh; }
+main { max-width: 820px; margin: 0 auto; padding: 32px 24px; }
+h1 { font-size: 21px; font-weight: 650; margin: 0 0 8px; }
+.lead { color: var(--muted); margin: 0 0 28px; font-size: 13px; }
+
+/* ── section ── */
+.section { margin-bottom: 28px; }
+.section-title { font-size: 13px; font-weight: 650; color: var(--muted); margin-bottom: 10px; text-transform: uppercase; letter-spacing: .06em; }
+.section-badge { font-size: 11px; padding: 2px 8px; border-radius: 4px; margin-left: 8px; }
+.badge-after { background: rgba(50,209,125,.18); color: #32d17d; }
+.badge-before { background: rgba(255,150,50,.18); color: #ff9632; }
+
+/* ── chat layout ── */
+.thread { display: flex; flex-direction: column; gap: 10px; }
+.user-row { display: flex; justify-content: flex-end; }
+.user-bubble { background: rgba(120,160,220,.12); border: 1px solid rgba(120,160,220,.2); border-radius: 16px 16px 4px 16px; padding: 10px 16px; max-width: 70%; font-size: 14px; }
+.assistant-row { display: flex; flex-direction: column; }
+.writer-reply-bubble { padding: 4px 0; }
+.reply-label { font-size: 10px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; color: rgba(255,255,255,.2); margin-bottom: 6px; }
+
+/* ── part collapsible ── */
+.part-collapsible { margin: 3px 0; border: 1px solid rgba(255,255,255,.07); border-radius: 8px; background: rgba(255,255,255,.025); overflow: hidden; }
+.part-collapsible[open] { background: rgba(255,255,255,.04); }
+.part-summary { display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 12px; cursor: pointer; user-select: none; list-style: none; }
+.part-summary::-webkit-details-marker { display: none; }
+.part-status { font-size: 10px; flex-shrink: 0; width: 14px; text-align: center; }
+.part-status--running { color: #f0c000; animation: pulse 1s infinite; }
+.part-status--completed { color: #32d17d; }
+.part-status--error { color: #f44; }
+.part-label { font-weight: 600; flex-shrink: 0; }
+.part-detail { color: rgba(255,255,255,.4); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.part-tool-name { font-weight: 600; color: var(--blue); }
+.part-children { padding: 0 12px 8px 28px; }
+.part-context-item { display: flex; align-items: center; gap: 6px; padding: 2px 0; font-size: 11px; color: rgba(255,255,255,.45); }
+.part-context-icon { flex-shrink: 0; font-size: 11px; }
+
+/* ── tool body ── */
+.part-tool-body { padding: 0 12px 8px 28px; }
+.part-tool-section { margin-top: 5px; }
+.part-tool-section-title { font-size: 9px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; color: rgba(255,255,255,.25); margin-bottom: 3px; }
+.part-code { margin: 0; padding: 8px 12px; font-size: 12px; line-height: 1.4; font-family: 'Cascadia Mono', Consolas, monospace; background: rgba(0,0,0,.35); border-radius: 6px; color: rgba(255,255,255,.6); white-space: pre-wrap; word-break: break-word; max-height: 140px; overflow-y: auto; }
+
+/* ── reasoning ── */
+.part-reasoning { border-color: rgba(255,255,255,.04); border-style: dashed; }
+.part-summary--reasoning { color: rgba(255,255,255,.35); font-style: italic; }
+.part-thinking-body { margin: 0; padding: 6px 12px 10px 28px; font-size: 11px; line-height: 1.5; color: rgba(255,255,255,.3); white-space: pre-wrap; max-height: 160px; overflow-y: auto; }
+
+/* ── error ── */
+.part-error-card { display: flex; align-items: center; gap: 8px; margin: 3px 0; padding: 8px 12px; border-radius: 8px; background: rgba(245,85,93,.08); border: 1px solid rgba(245,85,93,.18); font-size: 13px; }
+.part-error-icon { color: #f44; font-weight: 700; flex-shrink: 0; }
+.part-error-text { color: #faa; }
+
+/* ── info card ── */
+.part-info-card { display: flex; align-items: flex-start; gap: 8px; margin: 3px 0; padding: 8px 12px; border-radius: 8px; background: rgba(120,160,220,.06); border: 1px solid rgba(120,160,220,.12); font-size: 13px; }
+.part-info-label { font-weight: 600; color: var(--blue); flex-shrink: 0; }
+.part-info-text { color: rgba(255,255,255,.65); }
+
+/* ── text part ── */
+.part-text-content { font-size: 14px; line-height: 1.65; color: var(--text); white-space: pre-wrap; }
+
+/* ── animation ── */
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+
+/* ── before comparison ── */
+.before-box { background: rgba(255,150,50,.06); border: 1px solid rgba(255,150,50,.15); border-radius: 8px; padding: 12px 16px; font-size: 12px; color: rgba(255,255,255,.5); }
+.before-box code { color: rgba(255,255,255,.35); font-size: 11px; }
+</style>
+</head>
+<body>
+<main>
+<h1>Writer 显示重构 — 效果预览</h1>
+<p class="lead">左侧：重构后的 Part 渲染 · 右侧：重构前</p>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-title">1. 工具调用 — 可折叠卡片 + 状态动画<span class="section-badge badge-after">after</span></div>
+  <div class="thread">
+    <div class="assistant-row">
+      <div class="writer-reply-bubble">
+        <div class="reply-label">Writer</div>
+
+        <!-- running tool -->
+        <details class="part-collapsible part-tool" open>
+          <summary class="part-summary">
+            <span class="part-status part-status--running">◐</span>
+            <span class="part-tool-name">write_file</span>
+            <span class="part-detail">src/components/Header.tsx</span>
+          </summary>
+          <div class="part-tool-body">
+            <div class="part-tool-section">
+              <div class="part-tool-section-title">Input</div>
+              <pre class="part-code">{
+  "filePath": "src/components/Header.tsx",
+  "content": "import React from 'react';\n..."
+}</pre>
+            </div>
+          </div>
+        </details>
+
+        <!-- completed tool -->
+        <details class="part-collapsible part-tool">
+          <summary class="part-summary">
+            <span class="part-status part-status--completed">✓</span>
+            <span class="part-tool-name">read_file</span>
+            <span class="part-detail">package.json</span>
+          </summary>
+          <div class="part-tool-body">
+            <div class="part-tool-section">
+              <div class="part-tool-section-title">Result</div>
+              <pre class="part-code">{
+  "name": "lamwriter",
+  "version": "0.1.0",
+  "dependencies": { ... }
+}</pre>
+            </div>
+          </div>
+        </details>
+
+        <!-- error tool -->
+        <details class="part-collapsible part-tool" open>
+          <summary class="part-summary">
+            <span class="part-status part-status--error">✗</span>
+            <span class="part-tool-name">run_command</span>
+            <span class="part-detail">npm test</span>
+          </summary>
+          <div class="part-tool-body">
+            <div class="part-tool-section">
+              <div class="part-tool-section-title">Error</div>
+              <pre class="part-code" style="color:#faa">Test suite failed: 3 of 12 tests failed
+  ● Header › renders title
+    Expected: "LamWriter"
+    Received: "Lamwriter"</pre>
+            </div>
+          </div>
+        </details>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-title">2. 上下文工具 — 自动分组<span class="section-badge badge-after">after</span></div>
+  <div class="thread">
+    <div class="assistant-row">
+      <div class="writer-reply-bubble">
+        <div class="reply-label">Writer</div>
+
+        <details class="part-collapsible">
+          <summary class="part-summary part-summary--context">
+            <span class="part-status part-status--completed">●</span>
+            <span class="part-label">Context</span>
+            <span class="part-detail">Read 3 files · Searched 2 patterns · Listed 1 dir</span>
+          </summary>
+          <div class="part-children">
+            <div class="part-context-item"><span class="part-context-icon">📄</span><span>src/main.ts</span></div>
+            <div class="part-context-item"><span class="part-context-icon">📄</span><span>src/App.vue</span></div>
+            <div class="part-context-item"><span class="part-context-icon">📄</span><span>package.json</span></div>
+            <div class="part-context-item"><span class="part-context-icon">🔍</span><span>pattern="useSSE"</span></div>
+            <div class="part-context-item"><span class="part-context-icon">🔍</span><span>pattern="handleEvent"</span></div>
+            <div class="part-context-item"><span class="part-context-icon">📁</span><span>src/stores/</span></div>
+          </div>
+        </details>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-title">3. 完整对话示例<span class="section-badge badge-after">after</span></div>
+  <div class="thread">
+
+    <!-- user -->
+    <div class="user-row">
+      <div class="user-bubble">帮我给 session store 加上错误重试逻辑</div>
+    </div>
+
+    <!-- assistant with parts -->
+    <div class="assistant-row">
+      <div class="writer-reply-bubble">
+        <div class="reply-label">Writer</div>
+
+        <!-- thinking -->
+        <details class="part-collapsible part-reasoning">
+          <summary class="part-summary part-summary--reasoning">
+            <span class="part-status part-status--completed">◐</span>
+            <span class="part-label">Thinking…</span>
+          </summary>
+          <pre class="part-thinking-body">需要先了解当前 session store 的结构，然后找到错误处理的位置。
+关键文件应该是 src/stores/session.ts，需要查看 fetchSessions 和
+相关方法的错误处理。</pre>
+        </details>
+
+        <!-- context group -->
+        <details class="part-collapsible">
+          <summary class="part-summary part-summary--context">
+            <span class="part-status part-status--completed">●</span>
+            <span class="part-label">Context</span>
+            <span class="part-detail">Read 2 files</span>
+          </summary>
+          <div class="part-children">
+            <div class="part-context-item"><span class="part-context-icon">📄</span><span>src/stores/session.ts</span></div>
+            <div class="part-context-item"><span class="part-context-icon">📄</span><span>src/api/index.ts</span></div>
+          </div>
+        </details>
+
+        <!-- tool: write -->
+        <details class="part-collapsible part-tool">
+          <summary class="part-summary">
+            <span class="part-status part-status--completed">✓</span>
+            <span class="part-tool-name">edit_file</span>
+            <span class="part-detail">src/stores/session.ts</span>
+          </summary>
+          <div class="part-tool-body">
+            <div class="part-tool-section">
+              <div class="part-tool-section-title">Input</div>
+              <pre class="part-code">old_string: "async function fetchSessions..."
+new_string: "async function fetchSessions(retries=3)..."</pre>
+            </div>
+          </div>
+        </details>
+
+        <!-- text reply -->
+        <div class="part-text-content">已在 session.ts 的 fetchSessions、createSession、deleteSession 三个方法中加入指数退避重试逻辑（最多 3 次）。同时在 api/index.ts 中给网络错误加了可重试标记。需要我跑测试验证吗？</div>
+
+      </div>
+    </div>
+
+    <!-- user again -->
+    <div class="user-row">
+      <div class="user-bubble">好的，帮我跑一下测试</div>
+    </div>
+
+    <!-- assistant error -->
+    <div class="assistant-row">
+      <div class="writer-reply-bubble">
+        <div class="reply-label">Writer</div>
+
+        <details class="part-collapsible part-tool" open>
+          <summary class="part-summary">
+            <span class="part-status part-status--error">✗</span>
+            <span class="part-tool-name">run_tests</span>
+            <span class="part-detail">pytest src/stores/</span>
+          </summary>
+          <div class="part-tool-body">
+            <div class="part-tool-section">
+              <div class="part-tool-section-title">Error</div>
+              <pre class="part-code" style="color:#faa">1 test failed:
+test_session_retry › retries exhaust → throws after max</pre>
+            </div>
+          </div>
+        </details>
+
+        <div class="part-error-card">
+          <span class="part-error-icon">✗</span>
+          <span class="part-error-text">测试未通过：重试耗尽后未正确抛出异常。需要修复 session.ts 的 catch 块。</span>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-title">4. 重构前对比（工具显示）<span class="section-badge badge-before">before</span></div>
+  <div class="before-box">
+    <p>重构前 — 所有工具调用都是 <code>[running] tool_name: desc</code> 一行文本：</p>
+    <code>
+    [ASSISTANT] 我来帮你给 session store 加上错误重试逻辑<br>
+    [running] read_file: src/stores/session.ts<br>
+    [completed] read_file: 已读取 120 行<br>
+    [running] edit_file: src/stores/session.ts<br>
+    [completed] edit_file: 已修改<br>
+    代码已更新。测试结果：1 failed.<br>
+    [error] run_tests: pytest src/stores/ — test_session_retry failed<br>
+    需要修复 catch 块。
+    </code>
+    <p style="margin-top:12px;color:rgba(255,255,255,.35);font-size:11px">
+    ↑ 所有信息扁平混在一起，无折叠，无分组，无状态颜色，无 Input/Result/Error 分离。
+    </p>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-title">5. 改动清单</div>
+  <div class="part-text-content" style="font-size:13px;color:rgba(255,255,255,.65)">
+    <p><strong>Core UI</strong>（所有产品自动受益）：</p>
+    <ul>
+      <li><code>types.ts</code> — 新增 MessagePartType / MessagePartStatus / MessagePart</li>
+      <li><code>ChatThread.vue</code> — Part 渲染引擎：工具分组、可折叠卡片、状态动画</li>
+      <li><code>layout.css</code> — 200+ 行 Part 样式 + 动画</li>
+    </ul>
+    <p><strong>Writer 后端</strong>：</p>
+    <ul>
+      <li><code>schemas.py</code> — 新增 WriterPartEvent</li>
+      <li><code>events.py</code> — emit_part_event() 构造函数</li>
+      <li><code>writer_service.py</code> — 4 个关键点发送 writer_part SSE 事件</li>
+    </ul>
+    <p><strong>Writer 前端</strong>：</p>
+    <ul>
+      <li><code>types/index.ts</code> — SSEWriterPart 类型</li>
+      <li><code>stores/sse.ts</code> — writer_part 处理器 + currentParts</li>
+      <li><code>views/CoreWorkbenchView.vue</code> — Parts 合并到显示消息</li>
+    </ul>
+    <p><strong>Writer TUI</strong>：</p>
+    <ul>
+      <li><code>transcript.py</code> — VerticalScroll + PartWidget</li>
+      <li><code>reducer.py</code> — WriterPartEvent reducer</li>
+      <li><code>sse.py</code> — writer_part 识别</li>
+    </ul>
+  </div>
+</div>
+
+</main>
+</body>
+</html>

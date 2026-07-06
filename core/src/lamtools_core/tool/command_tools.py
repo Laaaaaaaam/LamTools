@@ -1,0 +1,393 @@
+from __future__ import annotations
+
+import shlex
+import sys
+from pathlib import Path
+from typing import Awaitable, Callable
+
+from lamtools_core.event import CoreEvent
+from lamtools_core.tool import ToolArtifact, ToolCall, ToolResult
+from lamtools_core.tool.command import CommandExecution as _CommandExecution
+from lamtools_core.tool.command import detect_test_command
+from lamtools_core.tool.command import format_command_output as _format_command_output
+from lamtools_core.tool.command import format_running_command_output as _format_running_command_output
+from lamtools_core.tool.command import run_subprocess as _run_subprocess
+from lamtools_core.tool.command import validate_command_paths as _validate_command_paths
+from lamtools_core.tool.command_runner import (
+    _BackgroundHttpProbe,
+    _cleanup_background_http_probe,
+    _extract_local_server_port,
+    _is_local_tcp_port_listening,
+    _local_server_error_metadata,
+    _looks_like_python_http_server,
+    _make_background_http_probe,
+    _make_readiness_http_probe,
+    _normalize_windows_shell_command,
+    _resolve_skill_script_paths,
+    _run_background_subprocess,
+    _run_subprocess,
+    _validate_readiness_url,
+    _windows_shell_argv,
+)
+
+
+def split_command_for_path_validation(command: str) -> list[str]:
+    """Split a command for validation while preserving Windows shell behavior."""
+    try:
+        return shlex.split(command, posix=False)
+    except ValueError:
+        return command.split()
+
+class CommandToolHandlers:
+    def __init__(
+        self,
+        *,
+        work_root: Path,
+        command_timeout: int,
+        loaded_skill_roots: set[Path],
+        core_event_callback: Callable[[CoreEvent], Awaitable[None]] | None = None,
+    ) -> None:
+        self._work_root = work_root
+        self._command_timeout = command_timeout
+        self._loaded_skill_roots = loaded_skill_roots
+        self._core_event_callback = core_event_callback
+
+    async def run_command(self, call: ToolCall) -> ToolResult:
+        """Execute a shell command inside *work_root*.
+
+        Both ``run_command`` and ``run_tests`` map to this handler.
+
+        On Unix (Linux/macOS): commands are split via ``shlex.split`` and
+        executed without shell expansion.
+
+        On Windows: commands are executed via PowerShell so the runtime matches
+        the Windows prompt contract and supports common commands such as
+        ``Get-ChildItem`` and ``Select-Object``.
+
+        Path validation applies regardless of platform. Risk approval is
+        handled by the caller's command policy before this method executes.
+        """
+        args = call.arguments if isinstance(call.arguments, dict) else {}
+        command = args.get("command", "")
+        timeout = args.get("timeout", None)
+        background = bool(args.get("background")) if args.get("background") is not None else False
+        readiness_url = args.get("readiness_url")
+        readiness_text = args.get("readiness_text")
+
+        if not command or not isinstance(command, str):
+            return ToolResult(
+                call_id=call.id, name=call.name,
+                status="failed", error="Missing or invalid 'command' argument",
+            )
+        if readiness_url is not None and not isinstance(readiness_url, str):
+            return ToolResult(
+                call_id=call.id, name=call.name,
+                status="failed", error="'readiness_url' must be a string or null",
+            )
+        readiness_url = (readiness_url or "").strip()
+        if readiness_text is not None and not isinstance(readiness_text, str):
+            return ToolResult(
+                call_id=call.id, name=call.name,
+                status="failed", error="'readiness_text' must be a string or null",
+            )
+        readiness_text = readiness_text or ""
+        if readiness_url and not background:
+            return ToolResult(
+                call_id=call.id, name=call.name,
+                status="failed", error="'readiness_url' requires background=true",
+            )
+        if readiness_url:
+            try:
+                readiness_url = _validate_readiness_url(readiness_url)
+            except ValueError as exc:
+                return ToolResult(
+                    call_id=call.id, name=call.name,
+                    status="failed", error=str(exc),
+                )
+
+        if timeout is not None:
+            try:
+                timeout = int(timeout)
+            except (TypeError, ValueError):
+                return ToolResult(
+                    call_id=call.id, name=call.name,
+                    status="failed", error=f"Invalid timeout value: {args.get('timeout')!r}",
+                )
+        else:
+            timeout = self._command_timeout
+        if timeout <= 0:
+            return ToolResult(
+                call_id=call.id, name=call.name,
+                status="failed", error=f"Invalid timeout value: {timeout}",
+            )
+
+        command = _resolve_skill_script_paths(command, self._work_root, self._loaded_skill_roots)
+
+        if sys.platform == 'win32':
+            shell_command = _normalize_windows_shell_command(command)
+            argv = _windows_shell_argv(shell_command)
+            validation_argv = ["cmd", *split_command_for_path_validation(shell_command)]
+        else:
+            try:
+                argv = shlex.split(command)
+            except ValueError as exc:
+                return ToolResult(
+                    call_id=call.id, name=call.name,
+                    status="failed", error=f"Invalid command syntax: {exc}",
+                )
+            validation_argv = argv
+
+        if not argv:
+            return ToolResult(
+                call_id=call.id, name=call.name,
+                status="failed", error="Empty command",
+            )
+
+        try:
+            _validate_command_paths(
+                validation_argv,
+                self._work_root,
+                tuple(sorted(self._loaded_skill_roots, key=lambda item: item.as_posix())),
+            )
+        except ValueError as exc:
+            return ToolResult(
+                call_id=call.id, name=call.name,
+                status="failed", error=str(exc),
+            )
+
+        run_in_background = background
+        http_probe: _BackgroundHttpProbe | None = None
+        execution: _CommandExecution | None = None
+        try:
+            if run_in_background and readiness_url:
+                http_probe = _make_readiness_http_probe(readiness_url, readiness_text)
+            elif run_in_background and _looks_like_python_http_server(command):
+                requested_port = _extract_local_server_port(command)
+                if requested_port is not None:
+                    if _is_local_tcp_port_listening(requested_port):
+                        execution = _CommandExecution(
+                            exit_code=1,
+                            background=True,
+                            error=(
+                                f"Port {requested_port} is already listening on 127.0.0.1. "
+                                "Do not retry the same port; choose a free port."
+                            ),
+                            error_type="PortInUse",
+                            metadata=_local_server_error_metadata(
+                                error_kind="port_in_use",
+                                recommended_action="choose_free_port",
+                                port=requested_port,
+                            ),
+                        )
+                    else:
+                        try:
+                            http_probe = _make_background_http_probe(self._work_root, requested_port)
+                        except OSError as exc:
+                            return ToolResult(
+                                call_id=call.id,
+                                name=call.name,
+                                status="failed",
+                                error=f"Cannot create local server probe file: {exc}",
+                                metadata={
+                                    "command": command,
+                                    "port": requested_port,
+                                    "error_type": "LocalServerProbeSetupFailed",
+                                    "error_kind": "probe_setup_failed",
+                                    "retryable": False,
+                                    "recommended_action": "report_probe_setup_failure",
+                                    "background": True,
+                                },
+                            )
+            if execution is None:
+                if run_in_background:
+                    execution = await _run_background_subprocess(
+                        argv,
+                        cwd=self._work_root,
+                        command=command,
+                        http_probe=http_probe,
+                    )
+                else:
+                    async def _emit_command_progress(stdout: str, stderr: str) -> None:
+                        if self._core_event_callback is None:
+                            return
+                        session_id = str(call.metadata.get("_runtime_session_id") or "")
+                        if not session_id:
+                            return
+                        run_id = str(call.metadata.get("_runtime_run_id") or "")
+                        await self._core_event_callback(CoreEvent(
+                            name="runtime.part",
+                            category="tool",
+                            payload={
+                                "part_type": "tool_result",
+                                "status": "running",
+                                "content": _format_running_command_output(stdout, stderr, command),
+                                "tool_call_id": call.id,
+                                "call_id": call.id,
+                                "tool_name": call.name,
+                                "tool_args": args,
+                                "part_id": f"{call.id}:result",
+                            },
+                            session_id=session_id,
+                            run_id=run_id,
+                            tags=["tool", "part", "progress"],
+                        ))
+
+                    execution = await _run_subprocess(
+                        argv,
+                        cwd=self._work_root,
+                        timeout=timeout,
+                        progress_callback=_emit_command_progress if self._core_event_callback is not None else None,
+                    )
+        finally:
+            _cleanup_background_http_probe(http_probe)
+        public_call_metadata = {
+            key: value
+            for key, value in dict(call.metadata or {}).items()
+            if not str(key).startswith("_runtime_")
+        }
+        output = _format_command_output(
+            execution.stdout,
+            execution.stderr,
+            execution.exit_code,
+            command,
+            timed_out=execution.timed_out,
+            timeout_val=timeout,
+        )
+        metadata = {
+            **public_call_metadata,
+            "command": command,
+            "argv": argv,
+            "exit_code": execution.exit_code,
+            "timed_out": execution.timed_out,
+            "background": execution.background,
+            "duration_seconds": execution.duration_seconds,
+            **({"readiness_url": readiness_url} if readiness_url else {}),
+            **({"readiness_text": readiness_text} if readiness_url and readiness_text else {}),
+            **execution.metadata,
+        }
+        if execution.error_type:
+            metadata["error_type"] = execution.error_type
+        artifact = ToolArtifact(
+            kind="command_output",
+            uri="",
+            content=output,
+            metadata={
+                "command": command,
+                "exit_code": execution.exit_code,
+                "timed_out": execution.timed_out,
+                "background": execution.background,
+                "duration_seconds": execution.duration_seconds,
+                "stdout": execution.stdout,
+                "stderr": execution.stderr,
+                **({"error": execution.error} if execution.error else {}),
+                **({"error_type": execution.error_type} if execution.error_type else {}),
+                **execution.metadata,
+            },
+        )
+
+        if execution.error:
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="failed",
+                content=output,
+                error=execution.error,
+                artifacts=[artifact],
+                metadata=metadata,
+            )
+
+        if execution.background:
+            return ToolResult(
+                call_id=call.id, name=call.name,
+                status="ok", content=output,
+                artifacts=[artifact],
+                metadata=metadata,
+            )
+
+        if execution.exit_code != 0:
+            return ToolResult(
+                call_id=call.id, name=call.name,
+                status="failed",
+                content=output,
+                error=f"Command exited with code {execution.exit_code}",
+                artifacts=[artifact],
+                metadata=metadata,
+            )
+
+        return ToolResult(
+            call_id=call.id, name=call.name,
+            status="ok", content=output,
+            artifacts=[artifact],
+            metadata=metadata,
+        )
+
+    async def run_tests(self, call: ToolCall) -> ToolResult:
+        """Run tests and return a structured test-result contract."""
+        args = call.arguments if isinstance(call.arguments, dict) else {}
+        command = args.get("command")
+        if command is not None and not isinstance(command, str):
+            return ToolResult(call_id=call.id, name=call.name, status="failed", error="'command' must be a string or null")
+        command = (command or "").strip() or self._detect_test_command()
+        if not command:
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="failed",
+                error="No test command detected; pass an explicit command",
+                metadata={"command": "", "exit_code": None, "passed": False, "summary": "not_detected"},
+            )
+
+        timeout = args.get("timeout")
+        if timeout is None:
+            timeout = 180
+
+        command_result = await self.run_command(
+            ToolCall(
+                id=call.id,
+                name=call.name,
+                arguments={"command": command, "timeout": timeout},
+            )
+        )
+        command_metadata = dict(command_result.metadata or {})
+        exit_code = command_metadata.get("exit_code")
+        passed = command_result.status == "ok" and exit_code == 0
+        timed_out = bool(command_metadata.get("timed_out"))
+        duration_seconds = command_metadata.get("duration_seconds")
+        summary = "passed" if passed else "failed"
+        if timed_out:
+            summary = "timed_out"
+
+        content_lines = [
+            f"[test_result] {summary}",
+            f"[command] {command}",
+            f"[exit_code] {exit_code}",
+        ]
+        if isinstance(duration_seconds, (int, float)):
+            content_lines.append(f"[duration_seconds] {duration_seconds:.2f}")
+        content = "\n".join(content_lines) + "\n\n" + (command_result.content or command_result.error or "")
+
+        metadata = {
+            **command_metadata,
+            "command": command,
+            "passed": passed,
+            "summary": summary,
+        }
+        return ToolResult(
+            call_id=call.id,
+            name=call.name,
+            status="ok" if passed else "failed",
+            content=content,
+            error="" if passed else (command_result.error or f"Tests {summary}"),
+            artifacts=[
+                ToolArtifact(
+                    kind="test_result",
+                    uri="",
+                    content=command_result.content,
+                    metadata=metadata,
+                )
+            ],
+            metadata=metadata,
+        )
+
+    def _detect_test_command(self) -> str:
+        return detect_test_command(self._work_root)

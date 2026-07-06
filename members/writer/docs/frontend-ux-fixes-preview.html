@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LamWriter 前端体验修正预览</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0d0d0e;
+      --panel: #151517;
+      --panel-2: #1b1b1e;
+      --line: #2a2a2e;
+      --text: #eeeeef;
+      --muted: #9b9ba1;
+      --soft: #c9c9ce;
+      --green: #72a476;
+      --red: #b45f63;
+      --yellow: #b6a266;
+      --blue: #7c98b8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 13px/1.5 Inter, "Segoe UI", Arial, sans-serif;
+    }
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 28px;
+    }
+    h1 {
+      margin: 0 0 6px;
+      font-size: 22px;
+      font-weight: 650;
+      letter-spacing: 0;
+    }
+    .lead {
+      color: var(--muted);
+      margin: 0 0 22px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+      margin-bottom: 22px;
+    }
+    .panel {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 8px;
+      padding: 16px;
+      min-height: 180px;
+    }
+    .panel h2 {
+      margin: 0 0 12px;
+      font-size: 14px;
+      font-weight: 650;
+      color: var(--soft);
+    }
+    .bad h2 { color: #c27c7f; }
+    .good h2 { color: #9fc0a2; }
+    .stack { display: grid; gap: 10px; }
+    .raw-line {
+      color: var(--muted);
+      border-left: 2px solid #3a3a3f;
+      padding-left: 10px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .status-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .status {
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+    }
+    .status span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 4px;
+    }
+    .status strong {
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .task-card {
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 12px;
+    }
+    .task-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 7px;
+    }
+    .task-head strong { font-weight: 650; }
+    .pill {
+      font-size: 11px;
+      color: #d8d8dc;
+      border: 1px solid #3a3a40;
+      border-radius: 999px;
+      padding: 2px 7px;
+      background: #202025;
+      white-space: nowrap;
+    }
+    .pill.green { color: #bcd8bf; border-color: #46634a; }
+    .pill.yellow { color: #dfd1a1; border-color: #665933; }
+    .pill.red { color: #e3b4b6; border-color: #6f373b; }
+    .muted { color: var(--muted); }
+    .mini-list {
+      margin: 8px 0 0;
+      padding: 0;
+      list-style: none;
+      display: grid;
+      gap: 5px;
+      color: var(--soft);
+    }
+    .mini-list li::before {
+      content: "";
+      display: inline-block;
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: #696970;
+      margin-right: 8px;
+      vertical-align: 1px;
+    }
+    .agent-card {
+      border: 1px solid #33333a;
+      border-radius: 7px;
+      background: #19191d;
+      overflow: hidden;
+    }
+    .agent-card header {
+      display: flex;
+      justify-content: space-between;
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+    .agent-body {
+      display: grid;
+      grid-template-columns: 110px 1fr;
+      gap: 0;
+    }
+    .agent-body div {
+      padding: 9px 12px;
+      border-bottom: 1px solid #26262b;
+    }
+    .agent-body div:nth-child(odd) {
+      color: var(--muted);
+      background: #17171a;
+    }
+    .agent-body div:nth-last-child(-n+2) {
+      border-bottom: 0;
+    }
+    .review-card {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 12px;
+    }
+    .review-card button {
+      background: #eeeeef;
+      color: #111;
+      border: 0;
+      border-radius: 5px;
+      padding: 7px 10px;
+      font-weight: 650;
+    }
+    .decision {
+      border-left: 3px solid var(--yellow);
+    }
+    .decision.blocking {
+      border-left-color: var(--red);
+    }
+    .options {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .option {
+      border: 1px solid #39393f;
+      background: #202024;
+      color: var(--text);
+      border-radius: 6px;
+      padding: 8px 10px;
+    }
+    .heartbeat {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--soft);
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+    }
+    .bar {
+      height: 6px;
+      background: #25252a;
+      border-radius: 999px;
+      overflow: hidden;
+      margin-top: 10px;
+    }
+    .bar span {
+      display: block;
+      height: 100%;
+      width: 64%;
+      background: linear-gradient(90deg, #6f8f72, #9e8d58);
+    }
+    @media (max-width: 860px) {
+      .grid { grid-template-columns: 1fr; }
+      .status-strip { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>前端体验修正预览</h1>
+  <p class="lead">左侧是当前容易让用户困惑的表现，右侧是建议落地到正式前端的显示规则。</p>
+
+  <section class="grid">
+    <div class="panel bad">
+      <h2>1. 过程反馈：当前</h2>
+      <div class="stack">
+        <div class="raw-line">Let me inspect the project first...</div>
+        <div class="raw-line">Let me create the files...</div>
+        <div class="raw-line">Calling tool write_file...</div>
+        <div class="raw-line">DesignAgent round intent ok</div>
+        <div class="raw-line">Let me verify...</div>
+      </div>
+    </div>
+    <div class="panel good">
+      <h2>1. 过程反馈：建议</h2>
+      <div class="status-strip">
+        <div class="status"><span>当前阶段</span><strong>实现</strong></div>
+        <div class="status"><span>当前动作</span><strong>修改 timeline.py</strong></div>
+        <div class="status"><span>当前结果</span><strong>等待验证</strong></div>
+        <div class="status"><span>旧步骤</span><strong>已折叠 8 条</strong></div>
+      </div>
+      <div class="task-card" style="margin-top: 10px;">
+        <div class="task-head"><strong>正在实现视频时间轴</strong><span class="pill yellow">运行中</span></div>
+        <div class="muted">写入文件：video_editor/timeline.py</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div class="panel bad">
+      <h2>2. 状态显示：当前</h2>
+      <div class="stack">
+        <div class="raw-line">Git: undefined</div>
+        <div class="raw-line">运行时长 0s</div>
+        <div class="raw-line">Invalid Date</div>
+        <div class="raw-line">designok / done / ok</div>
+      </div>
+    </div>
+    <div class="panel good">
+      <h2>2. 状态显示：建议</h2>
+      <div class="status-strip">
+        <div class="status"><span>Git</span><strong>暂无 Git 状态</strong></div>
+        <div class="status"><span>任务</span><strong>暂无任务</strong></div>
+        <div class="status"><span>最近事件</span><strong>刚刚</strong></div>
+        <div class="status"><span>结果</span><strong>设计完成</strong></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div class="panel bad">
+      <h2>3. DesignAgent：当前</h2>
+      <div class="stack">
+        <div class="raw-line">调用 design</div>
+        <div class="raw-line">DesignAgent intent ok</div>
+        <div class="raw-line">DesignAgent candidates ok</div>
+        <div class="raw-line">DesignAgent decision ok</div>
+        <div class="raw-line">调用 design completed</div>
+      </div>
+    </div>
+    <div class="panel good">
+      <h2>3. DesignAgent：建议</h2>
+      <div class="agent-card">
+        <header><strong>设计完成</strong><span class="pill green">选中方案：Electron + 本地 FFmpeg</span></header>
+        <div class="agent-body">
+          <div>意图分析</div><div>用户要本地视频剪辑软件，优先桌面体验。</div>
+          <div>候选方案</div><div>MVP / 平衡 / 工程化 3 个候选。</div>
+          <div>修订</div><div>去除重架构，保留可交付路线。</div>
+          <div>决策</div><div>选择桌面壳 + 本地转码能力。</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div class="panel bad">
+      <h2>4. 变更审核：当前</h2>
+      <div class="review-card">
+        <div>
+          <strong>已编辑 7 个文件</strong>
+          <div class="muted">Git diff 暂无记录，按 Writer 写入步骤统计</div>
+        </div>
+        <button>审核</button>
+      </div>
+    </div>
+    <div class="panel good">
+      <h2>4. 变更审核：建议</h2>
+      <div class="stack">
+        <div class="review-card">
+          <div>
+            <strong>审核改动</strong>
+            <div class="muted">来自当前 Git diff，包含未跟踪文件 · +428 -12</div>
+          </div>
+          <button>查看 diff</button>
+        </div>
+        <div class="review-card">
+          <div>
+            <strong>写入记录</strong>
+            <div class="muted">没有真实 Git diff，仅显示 Writer 写入过的路径</div>
+          </div>
+          <button>查看记录</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div class="panel bad">
+      <h2>5. 决策点：当前</h2>
+      <div class="task-card decision">
+        <div class="task-head"><strong>确认计划</strong><span class="pill">可点击</span></div>
+        <div class="muted">用户不知道不选会不会暂停，也不知道为什么需要决定。</div>
+      </div>
+    </div>
+    <div class="panel good">
+      <h2>5. 决策点：建议</h2>
+      <div class="task-card decision blocking">
+        <div class="task-head"><strong>阻塞决策：选择商业分发路线</strong><span class="pill red">必须选择</span></div>
+        <div class="muted">原因：不同路线会影响依赖许可证、打包方式和后续实现。</div>
+        <div class="options">
+          <button class="option">继续当前方案</button>
+          <button class="option">改为纯本地方案</button>
+          <button class="option">先暂停</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div class="panel bad">
+      <h2>6. 长任务：当前</h2>
+      <div class="task-card">
+        <div class="task-head"><strong>Writer 正在处理</strong><span class="pill yellow">运行中</span></div>
+        <div class="muted">十几分钟没有明显变化，用户无法判断是在等模型还是卡死。</div>
+      </div>
+    </div>
+    <div class="panel good">
+      <h2>6. 长任务：建议</h2>
+      <div class="task-card">
+        <div class="task-head"><strong>仍在等待模型返回</strong><span class="pill yellow">已等待 7m 42s</span></div>
+        <div class="heartbeat"><span class="dot"></span><span>进程仍活跃，最近事件：42 秒前</span></div>
+        <div class="bar"><span></span></div>
+        <ul class="mini-list">
+          <li>当前阶段：验证</li>
+          <li>当前请求：修复浏览器 E2E 报错</li>
+          <li>预计超时：还剩 5m 18s</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+</main>
+</body>
+</html>

@@ -1,0 +1,86 @@
+{
+  "name": "lamwriter-console",
+  "private": true,
+  "version": "0.1.0",
+  "author": "Lam",
+  "description": "Local AI writing and coding workspace.",
+  "type": "module",
+  "engines": {
+    "node": ">=24.17.0 <25",
+    "npm": ">=11.17.0"
+  },
+  "scripts": {
+    "dev": "vite --port 6174",
+    "test": "node scripts/check-app-server-schema.mjs && node --test --experimental-strip-types --experimental-transform-types --experimental-specifier-resolution=node tests/appServer/*.test.ts",
+    "build": "vue-tsc -b && vite build",
+    "e2e:app-server": "node scripts/writer-app-server-e2e.mjs",
+    "e2e:app-server:approval": "node scripts/writer-app-server-approval-e2e.mjs",
+    "e2e:app-server:long-context": "node scripts/writer-app-server-long-context-e2e.mjs",
+    "preview": "vite preview",
+    "desktop:dev": "electron electron/main.cjs",
+    "desktop:backend": "cd .. && py -3.14 -m PyInstaller --noconfirm --clean --noconsole --name lamwriter-backend --onedir --paths backend --paths ..\\..\\core\\src --hidden-import aiosqlite --hidden-import aiosqlite.core --hidden-import sqlite3 --hidden-import uvicorn.loops.auto --hidden-import uvicorn.protocols.http.auto --hidden-import uvicorn.protocols.websockets.auto backend\\desktop_server.py",
+    "desktop:resources": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\stage-runtime-resources.ps1 -Destination ..\\dist\\runtime",
+    "desktop:build": "npm run build && npm run desktop:backend && npm run desktop:resources && electron-builder --win --x64",
+    "desktop:unpacked": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\package-electron-unpacked.ps1",
+    "desktop:parity-smoke": "node scripts\\parity-smoke.mjs",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "tauri:portable": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\package-tauri-portable.ps1"
+  },
+  "main": "electron/main.cjs",
+  "build": {
+    "appId": "com.lamtools.lamwriter",
+    "productName": "LamWriter",
+    "icon": "public/app-icon.ico",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist/lamwriter-backend",
+        "to": "backend"
+      },
+      {
+        "from": "../dist/runtime",
+        "to": "runtime"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.0",
+    "dompurify": "^3.4.11",
+    "katex": "^0.17.0",
+    "marked": "^18.0.5",
+    "mermaid": "^11.15.0",
+    "pinia": "^3.0.4",
+    "vue": "^3.5.38",
+    "vue-router": "^5.1.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.3",
+    "@types/dompurify": "^3.0.5",
+    "@types/node": "^26.0.0",
+    "@vitejs/plugin-vue": "^6.0.7",
+    "electron": "^42.4.1",
+    "electron-builder": "^26.15.3",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.16",
+    "vue-tsc": "^3.3.5"
+  }
+}

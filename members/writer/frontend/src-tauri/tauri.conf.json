@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "LamWriter",
+  "version": "0.1.0",
+  "identifier": "com.lamtools.lamwriter",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build && npm run desktop:backend && npm run desktop:resources",
+    "devUrl": "http://127.0.0.1:6174",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "LamWriter",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1100,
+        "minHeight": 720
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["../public/app-icon.ico"],
+    "resources": ["../../dist/lamwriter-backend", "../../dist/runtime"]
+  }
+}

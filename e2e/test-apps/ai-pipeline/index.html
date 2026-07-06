@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI 对话助手</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-container">
+    <!-- 侧栏（移动端用 backdrop） -->
+    <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <h1>对话</h1>
+        <button class="btn-new-chat" title="新建对话">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+        </button>
+      </div>
+      <div class="session-list"></div>
+      <div class="sidebar-footer">
+        <button class="btn-settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+          <span>设置</span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- 主区域 -->
+    <main class="main-area">
+      <!-- 聊天头部 -->
+      <header class="chat-header">
+        <div class="chat-header-title">AI 对话助手</div>
+        <div class="chat-header-actions">
+          <!-- 移动端侧栏切换 -->
+          <button class="btn-toggle-sidebar" id="toggleSidebar" style="display:none;" title="切换菜单">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="3" y1="12" x2="21" y2="12"></line>
+              <line x1="3" y1="6" x2="21" y2="6"></line>
+              <line x1="3" y1="18" x2="21" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- 消息列表 -->
+      <div class="messages-container">
+        <div class="empty-state">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M12 2a10 10 0 0 1 10 10c0 2.5-1 4.8-2.6 6.4L12 22l-7.4-3.6A10 10 0 0 1 2 12 10 10 0 0 1 12 2z"></path>
+            <path d="M8 12h8"></path>
+            <path d="M12 8v8"></path>
+          </svg>
+          <h2>AI 对话助手</h2>
+          <p>点击左侧「新建对话」开始，或在设置中配置 API</p>
+        </div>
+      </div>
+
+      <!-- 输入区 -->
+      <div class="input-area">
+        <div class="input-wrapper">
+          <textarea rows="1" placeholder="输入消息...（Enter 发送，Shift+Enter 换行）" disabled></textarea>
+          <button class="btn-send" disabled title="发送">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- 状态栏 -->
+      <div class="status-bar">准备就绪</div>
+    </main>
+  </div>
+
+  <!-- 脚本加载顺序：模型层 -> 服务层 -> 控制层 -->
+  <script src="config.js"></script>
+  <script src="message.js"></script>
+  <script src="storage.js"></script>
+  <script src="api.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

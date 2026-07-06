@@ -1,0 +1,140 @@
+from __future__ import annotations
+
+import logging
+
+from fastapi import HTTPException
+from sqlalchemy import delete
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.writer.core_kernel_adapter import schedule_writer_startup_prewarm
+from app.core.writer.git import WriterGitManager
+from app.models.attachment import WriterAttachment
+from app.models.message import WriterMessage
+from app.models.project import WriterProject
+from app.models.queued_input import WriterQueuedInput
+from app.models.session import WriterSession
+from app.routers.path_utils import ensure_work_root
+from app.services.project_management import ensure_writer_project
+from app.services.session_projection import session_response_projected
+
+logger = logging.getLogger(__name__)
+
+
+def normalize_session_mode(mode: str | None) -> str:
+    value = (mode or "EXECUTE").strip()
+    if not value:
+        return "EXECUTE"
+    return value.upper()
+
+
+async def create_writer_session(
+    db: AsyncSession,
+    *,
+    title: str = "New Session",
+    work_root: str = "",
+    mode: str = "EXECUTE",
+    project_id: str | None = None,
+    git_manager: WriterGitManager | None = None,
+    schedule_prewarm=schedule_writer_startup_prewarm,
+) -> dict:
+    normalized_root = ensure_work_root(work_root)
+    effective_project_id = project_id
+
+    if effective_project_id:
+        project = await db.get(WriterProject, effective_project_id)
+        if project is None:
+            raise HTTPException(status_code=400, detail="Project not found")
+        if not normalized_root:
+            normalized_root = ensure_work_root(project.work_root)
+    elif normalized_root:
+        project = await ensure_writer_project(db, work_root=normalized_root, git_manager=git_manager)
+        await db.flush()
+        effective_project_id = project.id
+
+    if normalized_root and git_manager is not None:
+        try:
+            await git_manager.init_repo(normalized_root)
+        except Exception:
+            logger.debug("Unexpected error during git init at %s", normalized_root, exc_info=True)
+
+    session = WriterSession(
+        title=title,
+        work_root=normalized_root,
+        mode=normalize_session_mode(mode),
+        project_id=effective_project_id,
+    )
+    db.add(session)
+    await db.commit()
+    await db.refresh(session)
+    schedule_prewarm(session.work_root)
+    return await session_response_projected(db, session)
+
+
+async def get_writer_session_response(
+    db: AsyncSession,
+    session_id: str,
+    *,
+    schedule_prewarm=schedule_writer_startup_prewarm,
+) -> dict:
+    session = await db.get(WriterSession, session_id)
+    if session is None:
+        raise LookupError("Session not found")
+    schedule_prewarm(session.work_root)
+    return await session_response_projected(db, session)
+
+
+async def update_writer_session(
+    db: AsyncSession,
+    session_id: str,
+    update_data: dict,
+    *,
+    git_manager: WriterGitManager | None = None,
+) -> dict:
+    session = await db.get(WriterSession, session_id)
+    if session is None:
+        raise LookupError("Session not found")
+
+    normalized_update = {key: value for key, value in update_data.items() if value is not None}
+    if "mode" in normalized_update:
+        normalized_update["mode"] = normalize_session_mode(normalized_update["mode"])
+    if "work_root" in normalized_update:
+        normalized_update["work_root"] = ensure_work_root(normalized_update["work_root"])
+    if "project_id" in normalized_update and normalized_update["project_id"]:
+        project = await db.get(WriterProject, normalized_update["project_id"])
+        if project is None:
+            raise ValueError("Project not found")
+        if "work_root" not in normalized_update or not normalized_update.get("work_root"):
+            normalized_update["work_root"] = ensure_work_root(project.work_root)
+    if "work_root" in normalized_update and normalized_update["work_root"] and git_manager is not None:
+        try:
+            await git_manager.init_repo(str(normalized_update["work_root"]))
+        except Exception:
+            logger.debug("Unexpected error during git init at %s", normalized_update["work_root"], exc_info=True)
+
+    for key, value in normalized_update.items():
+        setattr(session, key, value)
+
+    await db.commit()
+    await db.refresh(session)
+    return await session_response_projected(db, session)
+
+
+async def delete_writer_session(db: AsyncSession, session_id: str) -> None:
+    session = await db.get(WriterSession, session_id)
+    if session is None:
+        raise LookupError("Session not found")
+
+    await db.execute(delete(WriterAttachment).where(WriterAttachment.session_id == session_id))
+    await db.execute(delete(WriterMessage).where(WriterMessage.session_id == session_id))
+    await db.execute(delete(WriterQueuedInput).where(WriterQueuedInput.session_id == session_id))
+    await db.delete(session)
+    await db.commit()
+
+
+__all__ = [
+    "create_writer_session",
+    "delete_writer_session",
+    "get_writer_session_response",
+    "normalize_session_mode",
+    "update_writer_session",
+]

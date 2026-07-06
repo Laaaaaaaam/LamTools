@@ -1,0 +1,44 @@
+{
+  "name": "@lamtools/ui",
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24.17.0 <25",
+    "npm": ">=11.17.0"
+  },
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/lamtools-ui.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/lamtools-ui.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./styles": "./dist/style.css",
+    "./helpers": {
+      "import": "./dist/lamtools-ui.js",
+      "types": "./dist/helpers/index.d.ts"
+    }
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "typecheck": "vue-tsc --noEmit",
+    "preview": "vite preview",
+    "test:contract": "vitest run tests/slot-contract.test.ts tests/chat-thread-process.test.ts"
+  },
+  "dependencies": {
+    "vue": "^3.5.38"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.7",
+    "@vue/test-utils": "^2.4.11",
+    "jsdom": "^29.1.1",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.16",
+    "vitest": "^4.1.9",
+    "vue-tsc": "^3.3.5"
+  }
+}

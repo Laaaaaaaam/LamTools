@@ -1,0 +1,46 @@
+﻿/**
+ * Global reset — shared across all LamTools products
+ * Source: shared member frontend base styles.
+ */
+* { box-sizing: border-box; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: rgba(255,255,255,.18); border-radius: 999px; border: 2px solid transparent; background-clip: content-box; }
+*::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.34); }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button, input, select, textarea { font: inherit; color: inherit; }
+button { border: 0; cursor: pointer; background: transparent; }
+input, select, textarea {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  color: var(--text);
+  padding: 8px 12px;
+  outline: none;
+}
+input:focus, select:focus, textarea:focus {
+  border-color: var(--blue);
+}
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role="button"]:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+textarea { resize: vertical; line-height: 1.55; }
+h1, h2, h3, p { margin: 0; }
+a { color: var(--blue); text-decoration: none; }

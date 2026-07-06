@@ -1,0 +1,29 @@
+{
+  "id": "openai-chat",
+  "label": "OpenAI Chat Completions compatible",
+  "protocol": "openai-chat-completions",
+  "request": {
+    "thinking": {
+      "when_enabled": {
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": "$thinking_budget"
+        }
+      }
+    }
+  },
+  "stream_response": {
+    "content_delta": "choices.0.delta.content",
+    "reasoning_delta": "choices.0.delta.reasoning_content",
+    "tool_calls_delta": "choices.0.delta.tool_calls",
+    "finish_reason": "choices.0.finish_reason",
+    "usage": "usage"
+  },
+  "non_stream_response": {
+    "content": "choices.0.message.content",
+    "reasoning": "choices.0.message.reasoning_content",
+    "tool_calls": "choices.0.message.tool_calls",
+    "finish_reason": "choices.0.finish_reason",
+    "usage": "usage"
+  }
+}
