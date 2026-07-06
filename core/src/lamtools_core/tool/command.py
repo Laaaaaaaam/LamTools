@@ -58,6 +58,7 @@ def terminate_process_tree(process: subprocess.Popen[Any]) -> None:
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
             check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         return
     process.kill()

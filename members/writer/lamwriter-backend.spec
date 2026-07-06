@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('backend/app/prompts', 'app/prompts')]
+datas = [('backend/app/prompts', 'app/prompts'), ('backend/app/llm_adapters', 'app/llm_adapters')]
 binaries = []
 hiddenimports = []
 tmp_ret = collect_all('fastapi')
